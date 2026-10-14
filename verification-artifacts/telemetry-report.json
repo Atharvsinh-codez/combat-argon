@@ -1,0 +1,38 @@
+{
+  "timestamp": "2026-10-13T20:27:38.984Z",
+  "consoleErrors": [],
+  "consoleWarnings": [],
+  "pageErrors": [],
+  "externalRequests": [],
+  "glError": 0,
+  "webglVersion": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+  "renderer": "WebKit WebGL",
+  "telemetry": {
+    "fps": 128.20512507010423,
+    "frameTimeMs": 7.7999999998137355,
+    "avgFrameTimeMs": 7.800000190734863,
+    "p95FrameTimeMs": 7.800000190734863,
+    "worstFrameTimeMs": 7.800000190734863,
+    "physicsTimeMs": 0.19999999925494194,
+    "renderTimeMs": 7.6000000005587935,
+    "substeps": 1,
+    "drawCalls": 283,
+    "triangles": 87348,
+    "internalScale": 0.8,
+    "mode": "playing",
+    "playerPos": {
+      "x": 0.6000000000000001,
+      "y": 0,
+      "z": -24.5
+    },
+    "playerHealth": 100,
+    "magAmmo": 30,
+    "reserveAmmo": 120,
+    "adsProgress": 4.9312405541049954e-42,
+    "isReloading": false,
+    "alphaScore": 0,
+    "bravoScore": 0,
+    "botCount": 7,
+    "aliveEnemies": 4
+  }
+}

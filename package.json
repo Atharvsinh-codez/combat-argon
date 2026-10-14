@@ -1,0 +1,24 @@
+{
+  "name": "dustline-tactical-fps",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Browser-Native Three.js r180 WebGL2 Tactical FPS",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5173",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 4173",
+    "test": "node scripts/run-verification.mjs",
+    "benchmark": "node scripts/run-verification.mjs --benchmark"
+  },
+  "dependencies": {
+    "three": "0.180.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/three": "0.180.0",
+    "playwright": "^1.55.0",
+    "typescript": "^5.8.2",
+    "vite": "^7.0.0"
+  }
+}

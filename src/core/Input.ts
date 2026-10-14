@@ -1,0 +1,296 @@
+import { Settings } from './Settings';
+
+export type DebugViewMode =
+  | 'none'
+  | 'cascades'
+  | 'normals'
+  | 'velocity'
+  | 'ao'
+  | 'bvh'
+  | 'nav'
+  | 'audio'
+  | 'timings';
+
+export class Input {
+  private settings: Settings;
+  private keysDown = new Set<string>();
+  private keysPressed = new Set<string>();
+  private mouseButtonsDown = new Set<number>();
+  private mouseButtonsPressed = new Set<number>();
+
+  private mouseDeltaX = 0;
+  private mouseDeltaY = 0;
+  public isPointerLocked = false;
+  public debugView: DebugViewMode = 'none';
+
+  private targetElement: HTMLElement;
+  private onPointerLockChangeCallbacks: Array<(locked: boolean) => void> = [];
+  private onFirstInteractionCallbacks: Array<() => void> = [];
+  private interacted = false;
+
+  constructor(targetElement: HTMLElement, settings: Settings) {
+    this.targetElement = targetElement;
+    this.settings = settings;
+    this.bindEvents();
+    this.checkQueryDebug();
+  }
+
+  private checkQueryDebug(): void {
+    const params = new URLSearchParams(window.location.search);
+    const dbg = params.get('debug') as DebugViewMode | null;
+    if (dbg) {
+      this.debugView = dbg;
+    }
+  }
+
+  private bindEvents(): void {
+    window.addEventListener('keydown', (e) => {
+      if (!this.keysDown.has(e.code)) {
+        this.keysPressed.add(e.code);
+      }
+      this.keysDown.add(e.code);
+
+      // Debug view hotkeys F1-F9
+      if (e.code === 'Digit1' && e.altKey) this.debugView = 'none';
+      else if (e.code === 'Digit2' && e.altKey) this.debugView = 'cascades';
+      else if (e.code === 'Digit3' && e.altKey) this.debugView = 'normals';
+      else if (e.code === 'Digit4' && e.altKey) this.debugView = 'velocity';
+      else if (e.code === 'Digit5' && e.altKey) this.debugView = 'ao';
+      else if (e.code === 'Digit6' && e.altKey) this.debugView = 'bvh';
+      else if (e.code === 'Digit7' && e.altKey) this.debugView = 'nav';
+      else if (e.code === 'Digit8' && e.altKey) this.debugView = 'audio';
+      else if (e.code === 'Digit9' && e.altKey) this.debugView = 'timings';
+    });
+
+    window.addEventListener('keyup', (e) => {
+      this.keysDown.delete(e.code);
+    });
+
+    window.addEventListener('mousedown', (e) => {
+      this.triggerFirstInteraction();
+      if (!this.mouseButtonsDown.has(e.button)) {
+        this.mouseButtonsPressed.add(e.button);
+      }
+      this.mouseButtonsDown.add(e.button);
+    });
+
+    window.addEventListener('mouseup', (e) => {
+      this.mouseButtonsDown.delete(e.button);
+    });
+
+    window.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!this.isPointerLocked) return;
+      // Guard against browser spikes on pointer lock acquisition
+      if (Math.abs(e.movementX) > 450 || Math.abs(e.movementY) > 450) return;
+      this.mouseDeltaX += e.movementX;
+      this.mouseDeltaY += e.movementY;
+    });
+
+    document.addEventListener('pointerlockchange', () => {
+      this.isPointerLocked = document.pointerLockElement === this.targetElement;
+      if (!this.isPointerLocked) {
+        this.clearTransientInputs();
+      }
+      for (const cb of this.onPointerLockChangeCallbacks) {
+        cb(this.isPointerLocked);
+      }
+    });
+
+    window.addEventListener('blur', () => {
+      this.clearTransientInputs();
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        this.clearTransientInputs();
+      }
+    });
+  }
+
+  public triggerFirstInteraction(): void {
+    if (!this.interacted) {
+      this.interacted = true;
+      for (const cb of this.onFirstInteractionCallbacks) {
+        cb();
+      }
+    }
+  }
+
+  public onFirstInteraction(cb: () => void): void {
+    if (this.interacted) {
+      cb();
+    } else {
+      this.onFirstInteractionCallbacks.push(cb);
+    }
+  }
+
+  public onPointerLockChange(cb: (locked: boolean) => void): void {
+    this.onPointerLockChangeCallbacks.push(cb);
+  }
+
+  public requestPointerLock(): void {
+    this.triggerFirstInteraction();
+    try {
+      if (document.pointerLockElement !== this.targetElement) {
+        const promise = this.targetElement.requestPointerLock() as unknown as Promise<void> | undefined;
+        if (promise && typeof promise.catch === 'function') {
+          promise.catch(() => {
+            // Headless browsers or cancelled lock requests should not throw unhandled rejections
+          });
+        }
+      }
+    } catch {
+      // Ignore in headless automated tests
+    }
+  }
+
+  public exitPointerLock(): void {
+    try {
+      if (document.pointerLockElement) {
+        document.exitPointerLock();
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
+  public clearTransientInputs(): void {
+    this.keysDown.clear();
+    this.keysPressed.clear();
+    this.mouseButtonsDown.clear();
+    this.mouseButtonsPressed.clear();
+    this.mouseDeltaX = 0;
+    this.mouseDeltaY = 0;
+  }
+
+  public consumeLookDelta(isAds: boolean): { yawDelta: number; pitchDelta: number } {
+    const baseSens = 0.0019 * this.settings.data.sensitivity;
+    const mult = isAds ? this.settings.data.adsMultiplier : 1.0;
+    const inv = this.settings.data.invertY ? -1 : 1;
+
+    const yawDelta = -this.mouseDeltaX * baseSens * mult;
+    const pitchDelta = -this.mouseDeltaY * baseSens * mult * inv;
+
+    this.mouseDeltaX = 0;
+    this.mouseDeltaY = 0;
+    return { yawDelta, pitchDelta };
+  }
+
+  public injectLookDelta(dx: number, dy: number): void {
+    this.mouseDeltaX += dx;
+    this.mouseDeltaY += dy;
+  }
+
+  public setVirtualKey(code: string, down: boolean): void {
+    if (down) {
+      if (!this.keysDown.has(code)) this.keysPressed.add(code);
+      this.keysDown.add(code);
+    } else {
+      this.keysDown.delete(code);
+    }
+  }
+
+  public setVirtualMouseButton(button: number, down: boolean): void {
+    if (down) {
+      if (!this.mouseButtonsDown.has(button)) this.mouseButtonsPressed.add(button);
+      this.mouseButtonsDown.add(button);
+    } else {
+      this.mouseButtonsDown.delete(button);
+    }
+  }
+
+  public isKeyDown(code: string): boolean {
+    return this.keysDown.has(code);
+  }
+
+  public wasKeyPressed(code: string): boolean {
+    return this.keysPressed.has(code);
+  }
+
+  public isMouseDown(button: number): boolean {
+    return this.mouseButtonsDown.has(button);
+  }
+
+  public wasMousePressed(button: number): boolean {
+    return this.mouseButtonsPressed.has(button);
+  }
+
+  public getMoveAxes(): { x: number; z: number } {
+    const kb = this.settings.data.keybinds;
+    let x = 0;
+    let z = 0;
+    if (this.isKeyDown(kb.forward) || this.isKeyDown('ArrowUp')) z += 1;
+    if (this.isKeyDown(kb.backward) || this.isKeyDown('ArrowDown')) z -= 1;
+    if (this.isKeyDown(kb.right) || this.isKeyDown('ArrowRight')) x += 1;
+    if (this.isKeyDown(kb.left) || this.isKeyDown('ArrowLeft')) x -= 1;
+    const len = Math.hypot(x, z);
+    if (len > 1) {
+      x /= len;
+      z /= len;
+    }
+    return { x, z };
+  }
+
+  public isSprinting(): boolean {
+    const kb = this.settings.data.keybinds;
+    return this.isKeyDown(kb.sprint) || this.isKeyDown('ShiftRight');
+  }
+
+  public isCrouching(): boolean {
+    const kb = this.settings.data.keybinds;
+    return this.isKeyDown(kb.crouch) || this.isKeyDown('ControlLeft');
+  }
+
+  public wasJumpPressed(): boolean {
+    return this.wasKeyPressed(this.settings.data.keybinds.jump);
+  }
+
+  public isJumpHeld(): boolean {
+    return this.isKeyDown(this.settings.data.keybinds.jump);
+  }
+
+  public isAdsHeld(): boolean {
+    return this.isMouseDown(2) || this.isKeyDown('KeyV');
+  }
+
+  public isFireHeld(): boolean {
+    return this.isMouseDown(0);
+  }
+
+  public wasFirePressed(): boolean {
+    return this.wasMousePressed(0);
+  }
+
+  public wasReloadPressed(): boolean {
+    return this.wasKeyPressed(this.settings.data.keybinds.reload);
+  }
+
+  public wasFireModePressed(): boolean {
+    return this.wasKeyPressed(this.settings.data.keybinds.fireMode);
+  }
+
+  public wasInspectPressed(): boolean {
+    return this.wasKeyPressed(this.settings.data.keybinds.inspect);
+  }
+
+  public wasTacticalPressed(): boolean {
+    return this.wasKeyPressed(this.settings.data.keybinds.tactical);
+  }
+
+  public wasExplosivePressed(): boolean {
+    return this.wasKeyPressed(this.settings.data.keybinds.explosive);
+  }
+
+  public wasPausePressed(): boolean {
+    return this.wasKeyPressed(this.settings.data.keybinds.pause) || this.wasKeyPressed('KeyP');
+  }
+
+  public endFrame(): void {
+    this.keysPressed.clear();
+    this.mouseButtonsPressed.clear();
+  }
+}
