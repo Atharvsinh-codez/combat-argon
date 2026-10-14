@@ -6,6 +6,8 @@ export interface MenuCallbacks {
   onResume: () => void;
   onRestartMatch: () => void;
   onSettingsChanged: () => void;
+  onToggleTouchControls?: () => boolean;
+  isTouchControlsEnabled?: () => boolean;
 }
 
 /**
@@ -42,14 +44,14 @@ export class Menu {
           <button class="btn-secondary" id="btn-open-settings-title">GRAPHICS & AUDIO SETTINGS</button>
         </div>
         <div class="controls-grid">
-          <div><span>WASD</span> Move</div>
-          <div><span>MOUSE</span> Aim / Fire / ADS</div>
-          <div><span>SHIFT</span> Sprint</div>
-          <div><span>C</span> Crouch</div>
-          <div><span>SPACE</span> Jump / Mantle</div>
+          <div><span>WASD / L-STICK</span> Move &amp; Auto-Sprint</div>
+          <div><span>MOUSE / R-TOUCH</span> Aim / Fire / ADS</div>
+          <div><span>Q &amp; E / PEEK</span> Tactical Lean L/R</div>
+          <div><span>C / CRCH</span> Crouch Stance</div>
+          <div><span>SPACE / JUMP</span> Jump &amp; Mantle</div>
           <div><span>R / B / G</span> Reload / Mode / Frag</div>
-          <div><span>F</span> Inspect Rifle</div>
-          <div><span>TAB / ALT+9</span> Roster / Perf</div>
+          <div><span>F / INSP</span> Inspect Rifle</div>
+          <div><span>TAB / ROSTER</span> Tactical Scoreboard</div>
         </div>
       </div>
 
@@ -87,8 +89,12 @@ export class Menu {
             <input type="range" id="set-fov" min="70" max="105" step="1" />
           </label>
           <label class="setting-row">
-            <span>Mouse Sensitivity (<b id="lbl-sens">1.00</b>)</span>
+            <span>Look / Aim Sensitivity (<b id="lbl-sens">1.00</b>)</span>
             <input type="range" id="set-sens" min="0.1" max="3.0" step="0.05" />
+          </label>
+          <label class="setting-row">
+            <span>Mobile / Tablet Touch HUD</span>
+            <input type="checkbox" id="set-touch-hud" />
           </label>
           <label class="setting-row">
             <span>Temporal AA (TAA)</span>
@@ -210,6 +216,16 @@ export class Menu {
       this.syncInputsFromSettings();
       this.callbacks.onSettingsChanged();
     });
+
+    const touchHudInput = this.root.querySelector('#set-touch-hud') as HTMLInputElement;
+    if (touchHudInput) {
+      touchHudInput.addEventListener('change', () => {
+        if (this.callbacks.onToggleTouchControls) {
+          const enabled = this.callbacks.onToggleTouchControls();
+          touchHudInput.checked = enabled;
+        }
+      });
+    }
   }
 
   public syncInputsFromSettings(): void {
@@ -225,6 +241,10 @@ export class Menu {
     (this.root.querySelector('#set-mb') as HTMLSelectElement).value = s.motionBlur;
     (this.root.querySelector('#set-master') as HTMLInputElement).value = String(s.masterVolume);
     (this.root.querySelector('#lbl-master') as HTMLElement).textContent = `${Math.round(s.masterVolume * 100)}%`;
+    const touchHudInput = this.root.querySelector('#set-touch-hud') as HTMLInputElement;
+    if (touchHudInput && this.callbacks.isTouchControlsEnabled) {
+      touchHudInput.checked = this.callbacks.isTouchControlsEnabled();
+    }
   }
 
   public showTitle(): void {

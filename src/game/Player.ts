@@ -24,6 +24,8 @@ export class Player implements CombatantTarget {
   public yaw = 0;
   public pitch = 0;
   public cameraRoll = 0;
+  public leanAmount = 0;
+  private leanOffset = new THREE.Vector3();
   public landingCompression = 0;
   public damageCameraKick = new THREE.Vector2();
   public damageFlash = 0;
@@ -210,8 +212,22 @@ export class Player implements CombatantTarget {
     }
     this.landingCompression *= Math.exp(-14 * dt);
 
-    // Subtle strafe camera roll inertia
-    const targetRoll = -axes.x * 0.016 * this.settings.data.cameraShake;
+    // Subtle strafe camera roll inertia + tactical lean (Q/E or mobile Lean L/R)
+    const leanTarget = isSprinting ? 0 : input.getLeanTarget();
+    this.leanAmount += (leanTarget - this.leanAmount) * Math.min(1, dt * 11);
+    if (Math.abs(this.leanAmount) > 0.005) {
+      this.controller.getEyePosition(1.0, this._eyePos);
+      const leanDir = rightXZ.clone().multiplyScalar(Math.sign(this.leanAmount));
+      const maxLeanDist = Math.abs(this.leanAmount) * 0.34;
+      const leanHit = bvh.raycast(this._eyePos, leanDir, maxLeanDist + 0.22);
+      const safeDist = leanHit.hit ? Math.max(0, leanHit.distance - 0.22) : maxLeanDist;
+      this.leanOffset.copy(leanDir).multiplyScalar(safeDist);
+    } else {
+      this.leanOffset.set(0, 0, 0);
+    }
+
+    const targetRoll =
+      -axes.x * 0.016 * this.settings.data.cameraShake - this.leanAmount * 0.145;
     this.cameraRoll += (targetRoll - this.cameraRoll) * Math.min(1, dt * 12);
 
     // Footstep cadence
@@ -239,6 +255,7 @@ export class Player implements CombatantTarget {
       this.weapon.toggleFireMode(spatialAudio.synth);
     }
     if (input.wasReloadPressed()) {
+      input.touchAdsToggled = false;
       this.weapon.startReload(spatialAudio.synth);
     }
     if (input.wasInspectPressed()) {
@@ -329,6 +346,7 @@ export class Player implements CombatantTarget {
   ): ShotOutcome {
     const shotParams = this.weapon.triggerShot();
     this.controller.getEyePosition(1.0, this._eyePos);
+    this._eyePos.add(this.leanOffset);
     this.getAimDirection(this._forward);
     this._right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
 
@@ -443,7 +461,7 @@ export class Player implements CombatantTarget {
     }
 
     this.weapon.root.visible = true;
-    camera.position.copy(this._eyePos);
+    camera.position.copy(this._eyePos).add(this.leanOffset);
     camera.rotation.set(
       this.pitch + this.damageCameraKick.x,
       this.yaw + this.damageCameraKick.y,

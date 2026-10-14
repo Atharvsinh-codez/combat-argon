@@ -100,7 +100,12 @@ export class Prepass {
   }
 
   public resize(width: number, height: number): void {
+    this.initializedHistory = false;
     this.initTarget(width, height);
+  }
+
+  public resetHistory(): void {
+    this.initializedHistory = false;
   }
 
   public get normalDepthTexture(): THREE.Texture {

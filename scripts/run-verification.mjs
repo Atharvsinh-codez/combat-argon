@@ -226,6 +226,35 @@ async function runVerification() {
       window.__GAME_DEBUG__.stepSeconds(0.25, false);
     });
 
+    console.log('[Verification] Capturing Mobile (844x390) & Tablet (1024x768) Touch Control HUD views...');
+    await page.setViewportSize({ width: 844, height: 390 });
+    await page.evaluate(() => {
+      window.__GAME_DEBUG__.setTouchMode(true);
+      window.__GAME_DEBUG__.teleportToView('central_market');
+      window.__GAME_DEBUG__.stepSeconds(0.25);
+    });
+    await page.screenshot({
+      path: path.join(ARTIFACTS_DIR, '11-mobile-touch-controls-844x390.png')
+    });
+
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.evaluate(() => {
+      window.__GAME_DEBUG__.teleportToView('archway_plaza');
+      window.__GAME_DEBUG__.stepSeconds(0.25);
+    });
+    await page.screenshot({
+      path: path.join(ARTIFACTS_DIR, '12-tablet-touch-controls-1024x768.png')
+    });
+
+    // Restore 1920x1080 desktop mode for final telemetry baseline
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.evaluate(() => {
+      window.__GAME_DEBUG__.setTouchMode(false);
+      window.__GAME_DEBUG__.teleportToView('central_market');
+      window.__GAME_DEBUG__.resetTimingHistory();
+      window.__GAME_DEBUG__.stepSeconds(0.25, false);
+    });
+
     // Gather telemetry & WebGL health
     const report = await page.evaluate(() => {
       const canvas = document.getElementById('game-canvas');

@@ -17,6 +17,7 @@ import { NavWorld } from './ai/NavWorld';
 import { RenderGraph } from './render/RenderGraph';
 import { HUD } from './ui/HUD';
 import { Menu } from './ui/Menu';
+import { TouchControls } from './ui/TouchControls';
 import { MatchDirector } from './game/MatchDirector';
 
 /**
@@ -44,6 +45,7 @@ class TacticalFPSGame {
   public player: Player;
   public hud: HUD;
   public menu: Menu;
+  public touchControls: TouchControls;
   public director: MatchDirector;
   public gameLoop: GameLoop;
 
@@ -166,14 +168,39 @@ class TacticalFPSGame {
     );
     this.renderGraph.viewmodelScene.add(this.player.weapon.root);
 
-    // 8. Tactical HUD, Menu & Match Director
+    // 8. Tactical HUD, Touch Controls, Menu & Match Director
     this.hud = new HUD(appEl);
+    this.touchControls = new TouchControls(appEl, this.input, {
+      onPauseRequested: () => {
+        if (this.director.mode === 'playing') {
+          this.director.mode = 'paused';
+          document.exitPointerLock?.();
+          this.touchControls.setVisible(false);
+          this.menu.showPause();
+        }
+      },
+      onToggleFullscreen: () => {
+        this.toggleFullscreen();
+      }
+    });
+
     this.menu = new Menu(appEl, this.settings, this.synth, {
       onDeploy: () => this.deployToCombat(),
       onResume: () => this.resumeCombat(),
       onRestartMatch: () => this.restartMatch(),
-      onSettingsChanged: () => this.applySettingsUpdate()
+      onSettingsChanged: () => this.applySettingsUpdate(),
+      onToggleTouchControls: () => {
+        this.input.setTouchModeEnabled(!this.input.touchModeEnabled);
+        return this.input.touchModeEnabled;
+      },
+      isTouchControlsEnabled: () => this.input.touchModeEnabled
     });
+
+    this.input.onTouchModeChange((enabled) => {
+      document.body.classList.toggle('touch-mode', enabled);
+      this.touchControls.setVisible(this.director.mode === 'playing' && enabled);
+    });
+    document.body.classList.toggle('touch-mode', this.input.touchModeEnabled);
 
     this.director = new MatchDirector(
       this.scene,
@@ -191,6 +218,7 @@ class TacticalFPSGame {
       (victory, alpha, bravo) => {
         document.exitPointerLock?.();
         this.hud.setVisible(false);
+        this.touchControls.setVisible(false);
         this.menu.showEndRound(victory, alpha, bravo);
       }
     );
@@ -203,6 +231,7 @@ class TacticalFPSGame {
       this.deployToCombat(false);
     } else {
       this.hud.setVisible(false);
+      this.touchControls.setVisible(false);
       this.menu.showTitle();
     }
 
@@ -223,6 +252,7 @@ class TacticalFPSGame {
       this.camera.aspect = window.innerWidth / Math.max(1, window.innerHeight);
       this.camera.updateProjectionMatrix();
       this.renderGraph.resize(window.innerWidth, window.innerHeight);
+      this.renderFrame(1.0, 1 / 60);
     });
 
     this.input.onFirstInteraction(() => {
@@ -234,6 +264,7 @@ class TacticalFPSGame {
         const params = new URLSearchParams(window.location.search);
         if (params.get('autostart') !== '1' && params.get('benchmark') !== '1') {
           this.director.mode = 'paused';
+          this.touchControls.setVisible(false);
           this.menu.showPause();
         }
       }
@@ -244,6 +275,7 @@ class TacticalFPSGame {
     this.synth.ensureContext(this.settings.data.masterVolume);
     this.menu.hideAll();
     this.hud.setVisible(true);
+    this.touchControls.setVisible(true);
     this.director.startNewMatch();
     if (requestLock) {
       this.input.requestPointerLock();
@@ -254,8 +286,32 @@ class TacticalFPSGame {
     this.synth.ensureContext(this.settings.data.masterVolume);
     this.menu.hideAll();
     this.hud.setVisible(true);
+    this.touchControls.setVisible(true);
     this.director.mode = 'playing';
     this.input.requestPointerLock();
+  }
+
+  public toggleFullscreen(): void {
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element;
+      webkitExitFullscreen?: () => Promise<void>;
+    };
+    const docEl = document.documentElement as HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void>;
+    };
+    if (!document.fullscreenElement && !doc.webkitFullscreenElement) {
+      if (docEl.requestFullscreen) {
+        docEl.requestFullscreen().catch(() => {});
+      } else if (docEl.webkitRequestFullscreen) {
+        docEl.webkitRequestFullscreen();
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      } else if (doc.webkitExitFullscreen) {
+        doc.webkitExitFullscreen();
+      }
+    }
   }
 
   public restartMatch(): void {
@@ -273,6 +329,7 @@ class TacticalFPSGame {
     if (this.input.wasPausePressed() && this.director.mode === 'playing') {
       this.director.mode = 'paused';
       document.exitPointerLock?.();
+      this.touchControls.setVisible(false);
       this.menu.showPause();
     }
 
@@ -346,11 +403,12 @@ class TacticalFPSGame {
         this.director.bravoScore,
         this.director.matchTimeRemaining,
         this.director.getCurrentZoneCallout(),
-        this.input.isKeyDown('Tab'),
+        this.input.isScoreboardShown(),
         this.director.getAllCombatantStats(),
         this.input.debugView === 'timings',
         telemetryText
       );
+      this.touchControls.update(this.player);
     }
   }
 
@@ -391,6 +449,7 @@ class TacticalFPSGame {
         }
         self.player.spawnAt(v.position, v.yaw);
         self.player.pitch = v.pitch;
+        self.renderGraph.prepass.resetHistory();
         self.gameLoop.stepDeterministic(0.15, false);
         return true;
       },
@@ -400,10 +459,15 @@ class TacticalFPSGame {
         }
         self.player.spawnAt(new THREE.Vector3(x, y, z), yaw);
         self.player.pitch = pitch;
+        self.renderGraph.prepass.resetHistory();
         self.gameLoop.stepDeterministic(0.1, false);
       },
       setAds: (ads: boolean) => {
         self.input.setVirtualMouseButton(2, ads);
+      },
+      setTouchMode: (enabled: boolean) => {
+        self.input.setTouchModeEnabled(enabled);
+        self.touchControls.setVisible(self.director.mode === 'playing' && enabled);
       },
       triggerFire: (shots = 1) => {
         for (let i = 0; i < shots; i++) {

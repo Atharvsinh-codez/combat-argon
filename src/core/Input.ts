@@ -23,16 +23,62 @@ export class Input {
   public isPointerLocked = false;
   public debugView: DebugViewMode = 'none';
 
+  // Mobile & Tablet Touch Control State
+  public isTouchDevice = false;
+  public touchModeEnabled = false;
+  private touchMoveX = 0;
+  private touchMoveZ = 0;
+  public touchSprintActive = false;
+  public touchAdsToggled = false;
+  public touchCrouchToggled = false;
+  public touchLeanState: -1 | 0 | 1 = 0;
+  public touchScoreboardOpen = false;
+
   private targetElement: HTMLElement;
   private onPointerLockChangeCallbacks: Array<(locked: boolean) => void> = [];
   private onFirstInteractionCallbacks: Array<() => void> = [];
+  private onTouchModeChangeCallbacks: Array<(enabled: boolean) => void> = [];
   private interacted = false;
 
   constructor(targetElement: HTMLElement, settings: Settings) {
     this.targetElement = targetElement;
     this.settings = settings;
+    this.detectTouchCapability();
     this.bindEvents();
     this.checkQueryDebug();
+  }
+
+  private detectTouchCapability(): void {
+    const params = new URLSearchParams(window.location.search);
+    const forceMobile = params.get('mobile') === '1' || params.get('touch') === '1';
+    const hasTouch =
+      forceMobile ||
+      'ontouchstart' in window ||
+      navigator.maxTouchPoints > 0 ||
+      window.matchMedia('(pointer: coarse)').matches;
+    this.isTouchDevice = hasTouch;
+    this.touchModeEnabled = hasTouch;
+  }
+
+  public setTouchModeEnabled(enabled: boolean): void {
+    if (this.touchModeEnabled === enabled) return;
+    this.touchModeEnabled = enabled;
+    if (!enabled) {
+      this.touchMoveX = 0;
+      this.touchMoveZ = 0;
+      this.touchSprintActive = false;
+      this.touchAdsToggled = false;
+      this.touchCrouchToggled = false;
+      this.touchLeanState = 0;
+      this.touchScoreboardOpen = false;
+    }
+    for (const cb of this.onTouchModeChangeCallbacks) {
+      cb(enabled);
+    }
+  }
+
+  public onTouchModeChange(cb: (enabled: boolean) => void): void {
+    this.onTouchModeChangeCallbacks.push(cb);
   }
 
   private checkQueryDebug(): void {
@@ -77,6 +123,17 @@ export class Input {
     window.addEventListener('mouseup', (e) => {
       this.mouseButtonsDown.delete(e.button);
     });
+
+    window.addEventListener(
+      'touchstart',
+      () => {
+        this.triggerFirstInteraction();
+        if (!this.touchModeEnabled) {
+          this.setTouchModeEnabled(true);
+        }
+      },
+      { passive: true }
+    );
 
     window.addEventListener('contextmenu', (e) => {
       e.preventDefault();
@@ -134,6 +191,9 @@ export class Input {
 
   public requestPointerLock(): void {
     this.triggerFirstInteraction();
+    if (this.touchModeEnabled && this.isTouchDevice) {
+      return;
+    }
     try {
       if (document.pointerLockElement !== this.targetElement) {
         const promise = this.targetElement.requestPointerLock() as unknown as Promise<void> | undefined;
@@ -165,6 +225,20 @@ export class Input {
     this.mouseButtonsPressed.clear();
     this.mouseDeltaX = 0;
     this.mouseDeltaY = 0;
+    this.touchMoveX = 0;
+    this.touchMoveZ = 0;
+    this.touchSprintActive = false;
+  }
+
+  public setTouchMove(x: number, z: number, sprint = false): void {
+    this.touchMoveX = Math.max(-1, Math.min(1, x));
+    this.touchMoveZ = Math.max(-1, Math.min(1, z));
+    this.touchSprintActive = sprint;
+    if (sprint) {
+      this.touchAdsToggled = false;
+      this.touchCrouchToggled = false;
+      this.touchLeanState = 0;
+    }
   }
 
   public consumeLookDelta(isAds: boolean): { yawDelta: number; pitchDelta: number } {
@@ -203,6 +277,18 @@ export class Input {
     }
   }
 
+  public injectKeyPress(code: string): void {
+    this.keysPressed.add(code);
+  }
+
+  public injectMouseDown(button: number): void {
+    this.setVirtualMouseButton(button, true);
+  }
+
+  public injectMouseUp(button: number): void {
+    this.setVirtualMouseButton(button, false);
+  }
+
   public isKeyDown(code: string): boolean {
     return this.keysDown.has(code);
   }
@@ -221,8 +307,8 @@ export class Input {
 
   public getMoveAxes(): { x: number; z: number } {
     const kb = this.settings.data.keybinds;
-    let x = 0;
-    let z = 0;
+    let x = this.touchMoveX;
+    let z = this.touchMoveZ;
     if (this.isKeyDown(kb.forward) || this.isKeyDown('ArrowUp')) z += 1;
     if (this.isKeyDown(kb.backward) || this.isKeyDown('ArrowDown')) z -= 1;
     if (this.isKeyDown(kb.right) || this.isKeyDown('ArrowRight')) x += 1;
@@ -237,16 +323,26 @@ export class Input {
 
   public isSprinting(): boolean {
     const kb = this.settings.data.keybinds;
-    return this.isKeyDown(kb.sprint) || this.isKeyDown('ShiftRight');
+    return this.isKeyDown(kb.sprint) || this.isKeyDown('ShiftRight') || this.touchSprintActive;
   }
 
   public isCrouching(): boolean {
     const kb = this.settings.data.keybinds;
-    return this.isKeyDown(kb.crouch) || this.isKeyDown('ControlLeft');
+    return this.isKeyDown(kb.crouch) || this.isKeyDown('ControlLeft') || this.touchCrouchToggled;
+  }
+
+  public getLeanTarget(): number {
+    if (this.isKeyDown('KeyQ')) return -1;
+    if (this.isKeyDown('KeyE')) return 1;
+    return this.touchLeanState;
   }
 
   public wasJumpPressed(): boolean {
-    return this.wasKeyPressed(this.settings.data.keybinds.jump);
+    const jumped = this.wasKeyPressed(this.settings.data.keybinds.jump);
+    if (jumped && this.touchCrouchToggled) {
+      this.touchCrouchToggled = false;
+    }
+    return jumped;
   }
 
   public isJumpHeld(): boolean {
@@ -254,7 +350,11 @@ export class Input {
   }
 
   public isAdsHeld(): boolean {
-    return this.isMouseDown(2) || this.isKeyDown('KeyV');
+    return this.isMouseDown(2) || this.isKeyDown('KeyV') || this.touchAdsToggled;
+  }
+
+  public isScoreboardShown(): boolean {
+    return this.isKeyDown('Tab') || this.touchScoreboardOpen;
   }
 
   public isFireHeld(): boolean {

@@ -340,14 +340,16 @@ export class HUD {
       hp <= 35 ? 'linear-gradient(90deg, #ff3b30, #ff6b58)' : 'linear-gradient(90deg, #e8f0f8, #ffffff)';
     this.hpTrailEl.style.width = `${this.trailHealth.toFixed(1)}%`;
 
-    const stanceLabel = !player.controller.isGrounded
+    const baseStance = !player.controller.isGrounded
       ? 'AIR'
       : player.controller.isCrouching
         ? 'CROUCH'
         : horizSpeed > 5.4
           ? 'SPRINT'
           : 'STAND';
-    this.stanceTextEl.textContent = stanceLabel;
+    const leanSuffix =
+      player.leanAmount < -0.35 ? ' · PEEK L' : player.leanAmount > 0.35 ? ' · PEEK R' : '';
+    this.stanceTextEl.textContent = `${baseStance}${leanSuffix}`;
     this.staminaFillEl.style.width = '100%';
 
     // 5. Weapon & Ammo Readout
