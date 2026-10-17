@@ -54,6 +54,9 @@ export class Player implements CombatantTarget {
   private _ejectPos = new THREE.Vector3();
   private _casingVel = new THREE.Vector3();
   private _casingAngVel = new THREE.Vector3();
+  private _forwardXZ = new THREE.Vector3();
+  private _rightXZ = new THREE.Vector3();
+  private _leanDir = new THREE.Vector3();
 
   public onShotOutcome?: (outcome: ShotOutcome) => void;
   public onKilledBy?: (killerName: string) => void;
@@ -188,8 +191,8 @@ export class Player implements CombatantTarget {
 
     const sinY = Math.sin(this.yaw);
     const cosY = Math.cos(this.yaw);
-    const forwardXZ = new THREE.Vector3(-sinY, 0, -cosY);
-    const rightXZ = new THREE.Vector3(cosY, 0, -sinY);
+    const forwardXZ = this._forwardXZ.set(-sinY, 0, -cosY);
+    const rightXZ = this._rightXZ.set(cosY, 0, -sinY);
 
     const wishVelX = (forwardXZ.x * axes.z + rightXZ.x * axes.x) * baseSpeed;
     const wishVelZ = (forwardXZ.z * axes.z + rightXZ.z * axes.x) * baseSpeed;
@@ -224,7 +227,7 @@ export class Player implements CombatantTarget {
     this.leanAmount += (leanTarget - this.leanAmount) * Math.min(1, dt * 11);
     if (Math.abs(this.leanAmount) > 0.005) {
       this.controller.getEyePosition(1.0, this._eyePos);
-      const leanDir = rightXZ.clone().multiplyScalar(Math.sign(this.leanAmount));
+      const leanDir = this._leanDir.copy(rightXZ).multiplyScalar(Math.sign(this.leanAmount));
       const maxLeanDist = Math.abs(this.leanAmount) * 0.34;
       const leanHit = bvh.raycast(this._eyePos, leanDir, maxLeanDist + 0.22);
       const safeDist = leanHit.hit ? Math.max(0, leanHit.distance - 0.22) : maxLeanDist;

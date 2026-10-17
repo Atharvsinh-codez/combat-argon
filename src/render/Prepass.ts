@@ -10,6 +10,7 @@ export class Prepass {
   private mrtMaterial: THREE.ShaderMaterial;
   private prevViewProjMatrix = new THREE.Matrix4();
   private currViewProjMatrix = new THREE.Matrix4();
+  private _vmViewProj = new THREE.Matrix4();
   private initializedHistory = false;
 
   constructor(width: number, height: number) {
@@ -170,7 +171,7 @@ export class Prepass {
 
     // Render viewmodel into MRT with reactive flag = 0.85 so TAA & AO protect weapon silhouettes
     if (renderViewmodel) {
-      const vmCurrVP = new THREE.Matrix4().multiplyMatrices(
+      const vmCurrVP = this._vmViewProj.multiplyMatrices(
         viewmodelCamera.projectionMatrix,
         viewmodelCamera.matrixWorldInverse
       );

@@ -24,6 +24,9 @@ export class ShadowSystem {
   private _lightView = new THREE.Matrix4();
   private _invLightView = new THREE.Matrix4();
   private _up = new THREE.Vector3(0, 1, 0);
+  private _origin = new THREE.Vector3(0, 0, 0);
+  private _hidden: THREE.Object3D[] = [];
+  private _nearOnly: THREE.Object3D[] = [];
   private frameCounter = 0;
 
   constructor(mapSize = 1536) {
@@ -77,26 +80,32 @@ export class ShadowSystem {
     mainCamera.getWorldDirection(this._forward);
 
     // Reference light basis for texel snapping
-    this._lightView.lookAt(sunDir, new THREE.Vector3(0, 0, 0), this._up);
+    this._lightView.lookAt(sunDir, this._origin, this._up);
     this._invLightView.copy(this._lightView).invert();
 
     const prevOverride = scene.overrideMaterial;
     const prevSkyVis = skyMesh.visible;
-    const hiddenPoints: THREE.Object3D[] = [];
-    for (const child of scene.children) {
-      if ((child as THREE.Points).isPoints && child.visible) {
-        child.visible = false;
-        hiddenPoints.push(child);
-      }
-    }
-
     skyMesh.visible = false;
+
+    // scene.overrideMaterial bypasses three's castShadow checks, so non-casters are hidden manually.
+    const hidden = this._hidden;
+    const nearOnly = this._nearOnly;
+    hidden.length = 0;
+    nearOnly.length = 0;
+    this.collectShadowExclusions(scene, hidden, nearOnly);
+    for (let i = 0; i < hidden.length; i++) hidden[i].visible = false;
+
     scene.overrideMaterial = this.depthMaterial;
+    let nearOnlyHidden = false;
 
     for (let c = 0; c < this.cascadeCount; c++) {
       // Update far cascades on alternating frames to save GPU budget while keeping near cascades at full rate
       if (c >= 2 && this.frameCounter > 2 && (this.frameCounter + c) % this.farCascadeStride !== 0) {
         continue;
+      }
+      if (c >= 2 && !nearOnlyHidden) {
+        for (let i = 0; i < nearOnly.length; i++) nearOnly[i].visible = false;
+        nearOnlyHidden = true;
       }
 
       const r = this.radii[c];
@@ -138,9 +147,12 @@ export class ShadowSystem {
 
     scene.overrideMaterial = prevOverride;
     skyMesh.visible = prevSkyVis;
-    for (const pt of hiddenPoints) {
-      pt.visible = true;
+    for (let i = 0; i < hidden.length; i++) hidden[i].visible = true;
+    if (nearOnlyHidden) {
+      for (let i = 0; i < nearOnly.length; i++) nearOnly[i].visible = true;
     }
+    hidden.length = 0;
+    nearOnly.length = 0;
 
     // Bind stabilized matrices and depth textures to world shaders
     sharedUniforms.uSunDir.value.copy(sunDir);
@@ -159,6 +171,29 @@ export class ShadowSystem {
     sharedUniforms.uCsmDepthTex2.value = this.cascadeTargets[2].texture;
     sharedUniforms.uCsmDepthTex3.value = this.cascadeTargets[3].texture;
     sharedUniforms.uCsmEnabled.value = 1.0;
+  }
+
+  private collectShadowExclusions(
+    obj: THREE.Object3D,
+    hidden: THREE.Object3D[],
+    nearOnly: THREE.Object3D[]
+  ): void {
+    const children = obj.children;
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      if (!child.visible) continue;
+      const anyChild = child as THREE.Mesh & THREE.Points & THREE.Line & THREE.Sprite;
+      if (anyChild.isPoints || anyChild.isLine || anyChild.isSprite) {
+        hidden.push(child);
+        continue;
+      }
+      if (anyChild.isMesh && !child.castShadow && child.children.length === 0) {
+        hidden.push(child);
+        continue;
+      }
+      if (child.userData.shadowNearOnly) nearOnly.push(child);
+      if (child.children.length > 0) this.collectShadowExclusions(child, hidden, nearOnly);
+    }
   }
 
   public dispose(): void {

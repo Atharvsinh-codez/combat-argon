@@ -65,7 +65,8 @@ export class RenderGraph {
       antialias: false,
       stencil: false,
       depth: true,
-      preserveDrawingBuffer: true
+      // Keeping the back buffer costs a full-frame copy each present; only automated captures need it.
+      preserveDrawingBuffer: new URLSearchParams(window.location.search).get('manual') === '1'
     });
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
     this.renderer.toneMapping = THREE.NoToneMapping;

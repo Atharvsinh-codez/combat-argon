@@ -9,6 +9,7 @@ import { CombatantTarget, DamageSystem, HitZone } from '../game/DamageSystem';
 import { EffectsSystem } from '../game/EffectsSystem';
 import { NavWorld } from './NavWorld';
 import { CoverNode } from '../world/PropSystem';
+import { mergeRigMeshes } from '../render/mergeRigMeshes';
 
 export type BotTacticalState =
   | 'PATROL'
@@ -89,6 +90,8 @@ export class BotCombatant implements CombatantTarget {
   private _muzzleWorld = new THREE.Vector3();
   private _rayOrigin = new THREE.Vector3();
   private _down = new THREE.Vector3(0, -1, 0);
+  private _moveGoal = new THREE.Vector3();
+  private _flankGoal = new THREE.Vector3();
 
   public onEliminated?: (
     victim: BotCombatant,
@@ -115,6 +118,9 @@ export class BotCombatant implements CombatantTarget {
     this.yaw = team === 'alpha' ? 0 : Math.PI;
 
     this.buildTacticalCharacterRig(variantIndex);
+    mergeRigMeshes(this.rootGroup, [this.muzzleFlashMesh]);
+    // Bots are small next to buildings: only the two near shadow cascades need them
+    this.rootGroup.userData.shadowNearOnly = true;
     scene.add(this.rootGroup);
   }
 
@@ -529,7 +535,7 @@ export class BotCombatant implements CombatantTarget {
         const strafeDir = Math.sin(nowSec * 2.1 + this.numericId) > 0 ? 1 : -1;
         const rightX = Math.cos(this.yaw) * strafeDir;
         const rightZ = -Math.sin(this.yaw) * strafeDir;
-        moveGoal = new THREE.Vector3(
+        moveGoal = this._moveGoal.set(
           this.controller.position.x + rightX * 2.0,
           this.controller.position.y,
           this.controller.position.z + rightZ * 2.0
@@ -584,7 +590,7 @@ export class BotCombatant implements CombatantTarget {
             -30,
             30
           );
-          const flankGoal = new THREE.Vector3(flankX, 0.05, this.lastKnownTargetPos.z);
+          const flankGoal = this._flankGoal.set(flankX, 0.05, this.lastKnownTargetPos.z);
           this.path = navWorld.findPath(this.controller.position, flankGoal);
           this.pathIndex = 0;
           this.repathTimer = 3.0;
@@ -735,9 +741,9 @@ export class BotCombatant implements CombatantTarget {
         if (nowSec - ev.timestamp > 0.5) continue;
         const d = this.controller.position.distanceTo(ev.position);
         if (d < ev.loudness) {
-          this.lastKnownTargetPos.copy(ev.position).add(
-            new THREE.Vector3(this.rng.signed() * 1.8, 0, this.rng.signed() * 1.8)
-          );
+          const jx = this.rng.signed() * 1.8;
+          const jz = this.rng.signed() * 1.8;
+          this.lastKnownTargetPos.set(ev.position.x + jx, ev.position.y, ev.position.z + jz);
           if (this.state === 'PATROL') {
             this.state = 'INVESTIGATE';
             this.stateTimer = 0;

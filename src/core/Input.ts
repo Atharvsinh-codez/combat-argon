@@ -240,9 +240,22 @@ export class Input {
     }
     try {
       if (document.pointerLockElement !== this.targetElement) {
-        const promise = this.targetElement.requestPointerLock() as unknown as Promise<void> | undefined;
+        const el = this.targetElement as HTMLElement & {
+          requestPointerLock(options?: { unadjustedMovement?: boolean }): Promise<void> | void;
+        };
+        // Raw (unaccelerated) mouse deltas where supported; fall back to the default lock otherwise.
+        let promise: Promise<void> | void;
+        try {
+          promise = el.requestPointerLock({ unadjustedMovement: true });
+        } catch {
+          promise = el.requestPointerLock();
+        }
         if (promise && typeof promise.catch === 'function') {
-          promise.catch(() => {
+          promise.catch((err: unknown) => {
+            if (document.pointerLockElement === this.targetElement) return;
+            if ((err as { name?: string } | null)?.name !== 'NotSupportedError') return;
+            const retry = el.requestPointerLock() as Promise<void> | void;
+            if (retry && typeof retry.catch === 'function') retry.catch(() => {});
             // Headless browsers or cancelled lock requests should not throw unhandled rejections
           });
         }

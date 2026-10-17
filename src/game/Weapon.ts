@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { SeededRandom } from '../core/SeededRandom';
 import { SynthEngine } from '../audio/SynthEngine';
+import { mergeRigMeshes } from '../render/mergeRigMeshes';
 
 export class SpringVec3 {
   public value = new THREE.Vector3();
@@ -102,12 +103,20 @@ export class Weapon {
   private readonly adsOffset = new THREE.Vector3(0.0, -0.0565, -0.195);
 
   private _worldMuzzle = new THREE.Vector3();
+  private _basePos = new THREE.Vector3();
+  private _baseRot = new THREE.Vector3();
   private _worldEject = new THREE.Vector3();
 
   constructor(private rng: SeededRandom) {
     this.root.name = 'FirstPersonViewmodelRoot';
     this.root.add(this.weaponRig);
     this.buildCarbineAndHands();
+    mergeRigMeshes(this.weaponRig, [
+      this.boltCarrierMesh,
+      this.chargingHandleMesh,
+      this.selectorMesh,
+      this.opticLensMesh
+    ]);
   }
 
   private buildCarbineAndHands(): void {
@@ -710,8 +719,8 @@ export class Weapon {
     this.wallProximity += (targetWallProx - this.wallProximity) * Math.min(1, dt * 14);
 
     // Base pose interpolation (Hip <-> ADS)
-    const basePos = new THREE.Vector3().lerpVectors(this.hipOffset, this.adsOffset, this.adsProgress);
-    const baseRot = new THREE.Vector3(0, 0, 0);
+    const basePos = this._basePos.lerpVectors(this.hipOffset, this.adsOffset, this.adsProgress);
+    const baseRot = this._baseRot.set(0, 0, 0);
 
     // 1. Idle breathing layer
     const breathScale = THREE.MathUtils.lerp(1.0, 0.22, this.adsProgress);
