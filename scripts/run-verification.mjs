@@ -17,7 +17,8 @@ const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.png': 'image/png',
-  '.svg': 'image/svg+xml'
+  '.svg': 'image/svg+xml',
+  '.webmanifest': 'application/manifest+json'
 };
 
 function startStaticDistServer() {
@@ -268,6 +269,69 @@ async function runVerification() {
         telemetry
       };
     });
+
+    console.log('[Verification] Emulating a real touch phone (isMobile, hasTouch, DPR 3)...');
+    const mobileContext = await browser.newContext({
+      viewport: { width: 844, height: 390 },
+      deviceScaleFactor: 3,
+      isMobile: true,
+      hasTouch: true
+    });
+    const mPage = await mobileContext.newPage();
+    mPage.on('console', (msg) => {
+      if (msg.type() === 'error') {
+        consoleErrors.push(`[mobile] ${msg.text()}`);
+        console.error('[Mobile Console Error]', msg.text());
+      }
+    });
+    mPage.on('pageerror', (err) => {
+      pageErrors.push(`[mobile] ${err.message || String(err)}`);
+      console.error('[Mobile Page Error]', err);
+    });
+    await mPage.goto(`${BASE_URL}/?seed=1337420&manual=1&mobile=1`, { waitUntil: 'networkidle' });
+    await mPage.waitForFunction(() => Boolean(window.__GAME_DEBUG__), { timeout: 30000 });
+    const mobileState = await mPage.evaluate(() => {
+      const g = window.__GAME_DEBUG__;
+      g.deploy();
+      g.teleportToView('central_market');
+      g.stepSeconds(0.3);
+      return {
+        quality: g.game.settings.data.quality,
+        touchMode: g.game.input.touchModeEnabled,
+        magBefore: g.game.player.weapon.magAmmo
+      };
+    });
+    if (mobileState.quality !== 'low' || !mobileState.touchMode) {
+      throw new Error(`Mobile defaults not applied: ${JSON.stringify(mobileState)}`);
+    }
+    // A quick tap (touchstart + touchend before the next sim step) must still fire one round
+    const fireBox = await mPage.locator('#tc-btn-fire-right').boundingBox();
+    if (!fireBox) throw new Error('Touch fire button not visible on mobile');
+    await mPage.touchscreen.tap(fireBox.x + fireBox.width / 2, fireBox.y + fireBox.height / 2);
+    const magAfter = await mPage.evaluate(() => {
+      window.__GAME_DEBUG__.stepSeconds(0.1);
+      return window.__GAME_DEBUG__.game.player.weapon.magAmmo;
+    });
+    if (magAfter !== mobileState.magBefore - 1) {
+      throw new Error(`Quick tap on fire button did not fire exactly one round (${mobileState.magBefore} -> ${magAfter})`);
+    }
+    await mPage.evaluate(() => window.__GAME_DEBUG__.stepSeconds(0.2));
+    await mPage.screenshot({
+      path: path.join(ARTIFACTS_DIR, '13-mobile-emulated-phone-844x390.png')
+    });
+
+    await mPage.setViewportSize({ width: 390, height: 844 });
+    await mPage.evaluate(() => window.__GAME_DEBUG__.stepSeconds(0.1));
+    const rotateShown = await mPage.evaluate(
+      () => getComputedStyle(document.getElementById('rotate-overlay')).display !== 'none'
+    );
+    await mPage.screenshot({
+      path: path.join(ARTIFACTS_DIR, '14-mobile-portrait-rotate-prompt-390x844.png')
+    });
+    if (!rotateShown) {
+      throw new Error('Rotate-device prompt not shown in portrait during a match');
+    }
+    await mobileContext.close();
 
     const summary = {
       timestamp: new Date().toISOString(),

@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { SeededRandom } from '../core/SeededRandom';
 import { MaterialId } from '../physics/BVH';
 
+// Must not alias a scratch matrix: inactive pool slots would inherit the last composed transform
+const ZERO_SCALE_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
+
 interface PooledParticle {
   active: boolean;
   kind: 'chip' | 'spark' | 'smoke';
@@ -97,8 +100,11 @@ export class EffectsSystem {
         const dy = (y / (size - 1)) * 2 - 1;
         const r = Math.hypot(dx, dy);
         const n = SeededRandom.valueNoise2D(x * 0.18, y * 0.18, 99);
-        const alpha = Math.max(0, 1 - r * (0.88 + n * 0.22));
-        const aByte = Math.round(alpha * alpha * 210);
+        // Smoothstep falloff that reaches zero well inside the quad, so puffs read as soft
+        // cloudlets instead of hard-edged discs
+        const edge = Math.max(0, Math.min(1, 1 - r * (1.05 + n * 0.3)));
+        const alpha = edge * edge * (3 - 2 * edge);
+        const aByte = Math.round(alpha * 150);
         const i4 = (y * size + x) * 4;
         data[i4] = 242;
         data[i4 + 1] = 232;
@@ -113,10 +119,12 @@ export class EffectsSystem {
     const smokeMat = new THREE.MeshBasicMaterial({
       map: puffTex,
       transparent: true,
-      opacity: 0.65,
+      opacity: 0.5,
       depthWrite: false,
       side: THREE.DoubleSide
     });
+    // Unlit puffs otherwise glow brighter than the sunlit walls behind them
+    smokeMat.color.setScalar(0.72);
     this.smokeInstanced = new THREE.InstancedMesh(smokeGeo, smokeMat, this.maxParticles);
     this.smokeInstanced.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.smokeInstanced.frustumCulled = false;
@@ -389,7 +397,7 @@ export class EffectsSystem {
   }
 
   public update(dt: number, camera: THREE.Camera): void {
-    const zero = this._mat4.makeScale(0, 0, 0);
+    const zero = ZERO_SCALE_MATRIX;
 
     for (let i = 0; i < this.maxParticles; i++) {
       const p = this.particles[i];

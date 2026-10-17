@@ -26,6 +26,9 @@ export class Input {
   // Mobile & Tablet Touch Control State
   public isTouchDevice = false;
   public touchModeEnabled = false;
+  /** `?mobile=1` / `?touch=1` pin touch mode on so a stray mouse event never switches it off. */
+  private touchModeForced = false;
+  private onGestureCallbacks: Array<() => void> = [];
   private touchMoveX = 0;
   private touchMoveZ = 0;
   public touchSprintActive = false;
@@ -57,7 +60,10 @@ export class Input {
       navigator.maxTouchPoints > 0 ||
       window.matchMedia('(pointer: coarse)').matches;
     this.isTouchDevice = hasTouch;
-    this.touchModeEnabled = hasTouch;
+    this.touchModeForced = forceMobile;
+    // Touch-screen laptops report touch support but are usually played with a mouse, so only
+    // phones/tablets (coarse primary pointer) start in touch mode; a real touch switches it on later.
+    this.touchModeEnabled = forceMobile || window.matchMedia('(pointer: coarse)').matches;
   }
 
   public setTouchModeEnabled(enabled: boolean): void {
@@ -89,8 +95,34 @@ export class Input {
     }
   }
 
+  /** Fires on every trusted user gesture; mobile audio can only be (re)unlocked from inside one. */
+  public onGesture(cb: () => void): void {
+    this.onGestureCallbacks.push(cb);
+  }
+
+  private emitGesture(): void {
+    for (const cb of this.onGestureCallbacks) cb();
+  }
+
+  private isFormTarget(target: EventTarget | null): boolean {
+    const el = target as HTMLElement | null;
+    if (!el || !el.tagName) return false;
+    const tag = el.tagName;
+    return tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'BUTTON' || el.isContentEditable;
+  }
+
   private bindEvents(): void {
     window.addEventListener('keydown', (e) => {
+      this.emitGesture();
+      // Stop the browser from moving focus (Tab), scrolling (Space/arrows) or navigating while in game
+      const inGame = this.isPointerLocked || !this.isFormTarget(e.target);
+      if (
+        inGame &&
+        (e.code === 'Tab' || e.code === 'Space' || e.code.startsWith('Arrow') || e.code === 'Backspace')
+      ) {
+        e.preventDefault();
+      }
+      if (e.repeat && this.keysDown.has(e.code)) return;
       if (!this.keysDown.has(e.code)) {
         this.keysPressed.add(e.code);
       }
@@ -111,6 +143,18 @@ export class Input {
     window.addEventListener('keyup', (e) => {
       this.keysDown.delete(e.code);
     });
+
+    window.addEventListener('pointerdown', (e) => {
+      this.emitGesture();
+      if (e.pointerType === 'touch' || e.pointerType === 'pen') {
+        if (!this.touchModeEnabled) this.setTouchModeEnabled(true);
+      } else if (e.pointerType === 'mouse' && this.touchModeEnabled && !this.touchModeForced) {
+        // Hybrid device: the player went back to the mouse, so restore desktop controls
+        this.setTouchModeEnabled(false);
+      }
+    });
+    window.addEventListener('touchend', () => this.emitGesture(), { passive: true });
+    window.addEventListener('click', () => this.emitGesture());
 
     window.addEventListener('mousedown', (e) => {
       this.triggerFirstInteraction();
@@ -191,7 +235,7 @@ export class Input {
 
   public requestPointerLock(): void {
     this.triggerFirstInteraction();
-    if (this.touchModeEnabled && this.isTouchDevice) {
+    if (this.touchModeEnabled) {
       return;
     }
     try {
@@ -227,6 +271,15 @@ export class Input {
     this.mouseDeltaY = 0;
     this.touchMoveX = 0;
     this.touchMoveZ = 0;
+    this.touchSprintActive = false;
+  }
+
+  /** Drop every latched toggle (ADS, crouch, lean, scoreboard), e.g. on death or respawn. */
+  public resetToggles(): void {
+    this.touchAdsToggled = false;
+    this.touchCrouchToggled = false;
+    this.touchLeanState = 0;
+    this.touchScoreboardOpen = false;
     this.touchSprintActive = false;
   }
 

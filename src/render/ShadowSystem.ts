@@ -7,6 +7,8 @@ import { WorldShaderUniforms } from '../world/MaterialLibrary';
  */
 export class ShadowSystem {
   public readonly cascadeCount = 4;
+  /** Far cascades (2, 3) re-render every N frames; near cascades always update. */
+  public farCascadeStride = 2;
   public readonly splits = [16, 38, 78, 160];
   public readonly radii = [22, 44, 78, 135];
   public mapSize = 1536;
@@ -93,7 +95,7 @@ export class ShadowSystem {
 
     for (let c = 0; c < this.cascadeCount; c++) {
       // Update far cascades on alternating frames to save GPU budget while keeping near cascades at full rate
-      if (c >= 2 && this.frameCounter > 2 && (this.frameCounter + c) % 2 !== 0) {
+      if (c >= 2 && this.frameCounter > 2 && (this.frameCounter + c) % this.farCascadeStride !== 0) {
         continue;
       }
 

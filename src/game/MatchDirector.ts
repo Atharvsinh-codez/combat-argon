@@ -301,6 +301,7 @@ export class MatchDirector {
     if (!this.player.isAlive && this.player.respawnTimer <= 0) {
       const sp = this.pickSafeSpawn('alpha');
       this.player.spawnAt(sp, Math.PI);
+      input.resetToggles();
     }
 
     // Update all bots

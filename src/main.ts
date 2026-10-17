@@ -84,6 +84,10 @@ class TacticalFPSGame {
     // 3. Custom SAH BVH & RigidBody / Casing Solver
     this.bvh = new BVH();
     this.synth = new SynthEngine(seed);
+    if (this.settings.isMobile) {
+      this.synth.lowCostPanning = true;
+      this.synth.maxVoices = 32;
+    }
     this.spatialAudio = new SpatialAudio(this.synth, this.bvh);
     this.rigidWorld = new RigidWorld(
       this.scene,
@@ -193,7 +197,8 @@ class TacticalFPSGame {
         this.input.setTouchModeEnabled(!this.input.touchModeEnabled);
         return this.input.touchModeEnabled;
       },
-      isTouchControlsEnabled: () => this.input.touchModeEnabled
+      isTouchControlsEnabled: () => this.input.touchModeEnabled,
+      onToggleFullscreen: () => this.toggleFullscreen()
     });
 
     this.input.onTouchModeChange((enabled) => {
@@ -235,6 +240,8 @@ class TacticalFPSGame {
       this.menu.showTitle();
     }
 
+    this.warmupShaders();
+
     // 9. Start Fixed 120 Hz Simulation & Render Loop
     this.gameLoop = new GameLoop(
       (dt) => this.stepFixed(dt),
@@ -247,16 +254,91 @@ class TacticalFPSGame {
     }
   }
 
+  /**
+   * Compile every shader variant up front. Muzzle flash, viewmodel, smoke, decals and throwables
+   * start hidden, so without this their programs compiled on first use and caused the hitch on
+   * the first shot / first grenade.
+   */
+  private warmupShaders(): void {
+    const revealed: THREE.Object3D[] = [];
+    const reveal = (root: THREE.Object3D) => {
+      root.traverse((o) => {
+        if (!o.visible) {
+          o.visible = true;
+          revealed.push(o);
+        }
+      });
+    };
+    const throwableProxy = new THREE.Mesh(
+      new THREE.SphereGeometry(0.05, 6, 6),
+      new THREE.MeshStandardMaterial({ color: 0x3b4730, metalness: 0.65, roughness: 0.4 })
+    );
+    throwableProxy.position.set(0, -50, 0);
+    this.scene.add(throwableProxy);
+    reveal(this.scene);
+    reveal(this.renderGraph.viewmodelScene);
+    try {
+      this.renderGraph.renderer.compile(this.scene, this.camera);
+      this.renderGraph.renderer.compile(this.renderGraph.viewmodelScene, this.renderGraph.viewmodelCamera);
+      this.renderGraph.renderFrame(
+        this.scene,
+        this.camera,
+        this.player.weapon.root,
+        this.matLib.sharedUniforms,
+        0,
+        1 / 60,
+        0,
+        0,
+        'none'
+      );
+    } catch {
+      // Warmup is best-effort; normal rendering compiles lazily
+    } finally {
+      for (const o of revealed) o.visible = false;
+      this.scene.remove(throwableProxy);
+      throwableProxy.geometry.dispose();
+      this.renderGraph.prepass.resetHistory();
+    }
+  }
+
+  private handleResize = (): void => {
+    this.camera.aspect = window.innerWidth / Math.max(1, window.innerHeight);
+    this.camera.updateProjectionMatrix();
+    this.renderGraph.resize(window.innerWidth, window.innerHeight);
+    this.renderFrame(1.0, 1 / 60);
+  };
+
   private bindSystemEvents(): void {
-    window.addEventListener('resize', () => {
-      this.camera.aspect = window.innerWidth / Math.max(1, window.innerHeight);
-      this.camera.updateProjectionMatrix();
-      this.renderGraph.resize(window.innerWidth, window.innerHeight);
-      this.renderFrame(1.0, 1 / 60);
-    });
+    window.addEventListener('resize', this.handleResize);
+    // Mobile browsers often report the new size a beat after the rotation/fullscreen event
+    const settleResize = () => {
+      this.handleResize();
+      setTimeout(this.handleResize, 120);
+      setTimeout(this.handleResize, 400);
+    };
+    window.addEventListener('orientationchange', settleResize);
+    const onFullscreenChange = () => {
+      const fs = this.isFullscreen();
+      document.body.classList.toggle('is-fullscreen', fs);
+      this.menu.setFullscreenState(fs);
+      settleResize();
+    };
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+    if (!this.fullscreenSupported()) {
+      document.body.classList.add('ios-no-fullscreen');
+    }
 
     this.input.onFirstInteraction(() => {
       this.synth.ensureContext(this.settings.data.masterVolume);
+    });
+    this.input.onGesture(() => {
+      this.synth.unlockFromGesture(this.settings.data.masterVolume);
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && this.synth.ctx) {
+        this.synth.ensureContext(this.settings.data.masterVolume);
+      }
     });
 
     this.input.onPointerLockChange((locked) => {
@@ -273,6 +355,8 @@ class TacticalFPSGame {
 
   public deployToCombat(requestLock = true): void {
     this.synth.ensureContext(this.settings.data.masterVolume);
+    // Fullscreen must be requested before pointer lock inside the same click
+    if (requestLock && this.settings.data.autoFullscreen) this.enterFullscreen();
     this.menu.hideAll();
     this.hud.setVisible(true);
     this.touchControls.setVisible(true);
@@ -284,6 +368,7 @@ class TacticalFPSGame {
 
   public resumeCombat(): void {
     this.synth.ensureContext(this.settings.data.masterVolume);
+    if (this.settings.data.autoFullscreen) this.enterFullscreen();
     this.menu.hideAll();
     this.hud.setVisible(true);
     this.touchControls.setVisible(true);
@@ -291,27 +376,55 @@ class TacticalFPSGame {
     this.input.requestPointerLock();
   }
 
-  public toggleFullscreen(): void {
-    const doc = document as Document & {
-      webkitFullscreenElement?: Element;
-      webkitExitFullscreen?: () => Promise<void>;
+  private isFullscreen(): boolean {
+    const doc = document as Document & { webkitFullscreenElement?: Element };
+    return !!(document.fullscreenElement || doc.webkitFullscreenElement);
+  }
+
+  private fullscreenSupported(): boolean {
+    const el = document.documentElement as HTMLElement & { webkitRequestFullscreen?: unknown };
+    return !!(el.requestFullscreen || el.webkitRequestFullscreen);
+  }
+
+  /** Must run inside a user gesture. Also locks phones to landscape where the browser allows it. */
+  public enterFullscreen(): void {
+    if (this.isFullscreen() || !this.fullscreenSupported()) return;
+    const el = document.documentElement as HTMLElement & {
+      webkitRequestFullscreen?: (opts?: unknown) => Promise<void> | void;
     };
-    const docEl = document.documentElement as HTMLElement & {
-      webkitRequestFullscreen?: () => Promise<void>;
+    const lockLandscape = () => {
+      const orientation = screen.orientation as ScreenOrientation & {
+        lock?: (o: string) => Promise<void>;
+      };
+      if (this.input.touchModeEnabled && orientation?.lock) {
+        orientation.lock('landscape').catch(() => {});
+      }
     };
-    if (!document.fullscreenElement && !doc.webkitFullscreenElement) {
-      if (docEl.requestFullscreen) {
-        docEl.requestFullscreen().catch(() => {});
-      } else if (docEl.webkitRequestFullscreen) {
-        docEl.webkitRequestFullscreen();
+    try {
+      if (el.requestFullscreen) {
+        el.requestFullscreen({ navigationUI: 'hide' }).then(lockLandscape).catch(() => {});
+      } else if (el.webkitRequestFullscreen) {
+        const r = el.webkitRequestFullscreen();
+        if (r && typeof (r as Promise<void>).then === 'function') (r as Promise<void>).then(lockLandscape).catch(() => {});
       }
-    } else {
-      if (document.exitFullscreen) {
-        document.exitFullscreen().catch(() => {});
-      } else if (doc.webkitExitFullscreen) {
-        doc.webkitExitFullscreen();
-      }
+    } catch {
+      // Ignore: fullscreen is a convenience
     }
+  }
+
+  public exitFullscreen(): void {
+    const doc = document as Document & { webkitExitFullscreen?: () => void };
+    if (!this.isFullscreen()) return;
+    if (document.exitFullscreen) {
+      document.exitFullscreen().catch(() => {});
+    } else if (doc.webkitExitFullscreen) {
+      doc.webkitExitFullscreen();
+    }
+  }
+
+  public toggleFullscreen(): void {
+    if (this.isFullscreen()) this.exitFullscreen();
+    else this.enterFullscreen();
   }
 
   public restartMatch(): void {
@@ -351,6 +464,9 @@ class TacticalFPSGame {
   }
 
   private renderFrame(alpha: number, frameDt: number): void {
+    if (this.director.mode === 'playing') {
+      this.player.applyFrameLook(this.input);
+    }
     this.director.syncVisuals(alpha, this.camera);
     this.rigidWorld.syncRenderTransforms(alpha);
 
@@ -385,13 +501,16 @@ class TacticalFPSGame {
     );
 
     if (this.director.mode !== 'title') {
-      const stats = this.renderGraph.getRenderCallStats();
-      const t = this.gameLoop.telemetry;
-      const telemetryText =
-        `FPS: ${t.fps.toFixed(1)} | AVG: ${t.avgFrameTimeMs.toFixed(2)}ms | P95: ${t.p95FrameTimeMs.toFixed(2)}ms\n` +
-        `PHYS: ${t.physicsTimeMs.toFixed(2)}ms | REND: ${t.renderTimeMs.toFixed(2)}ms | SCALE: ${Math.round(stats.internalScale * 100)}%\n` +
-        `CALLS: ${stats.calls} | TRIS: ${stats.triangles} | VOICES: ${this.synth.activeVoiceCount}\n` +
-        `POS: (${this.player.controller.position.x.toFixed(1)}, ${this.player.controller.position.y.toFixed(2)}, ${this.player.controller.position.z.toFixed(1)})`;
+      const telemetryText = (): string => {
+        const stats = this.renderGraph.getRenderCallStats();
+        const t = this.gameLoop.telemetry;
+        return (
+          `FPS: ${t.fps.toFixed(1)} | AVG: ${t.avgFrameTimeMs.toFixed(2)}ms | P95: ${t.p95FrameTimeMs.toFixed(2)}ms\n` +
+          `PHYS: ${t.physicsTimeMs.toFixed(2)}ms | REND: ${t.renderTimeMs.toFixed(2)}ms | SCALE: ${Math.round(stats.internalScale * 100)}%\n` +
+          `CALLS: ${stats.calls} | TRIS: ${stats.triangles} | VOICES: ${this.synth.activeVoiceCount}\n` +
+          `POS: (${this.player.controller.position.x.toFixed(1)}, ${this.player.controller.position.y.toFixed(2)}, ${this.player.controller.position.z.toFixed(1)})`
+        );
+      };
 
       this.hud.update(
         frameDt,
@@ -404,7 +523,7 @@ class TacticalFPSGame {
         this.director.matchTimeRemaining,
         this.director.getCurrentZoneCallout(),
         this.input.isScoreboardShown(),
-        this.director.getAllCombatantStats(),
+        () => this.director.getAllCombatantStats(),
         this.input.debugView === 'timings',
         telemetryText
       );

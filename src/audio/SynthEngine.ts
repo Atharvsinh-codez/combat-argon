@@ -39,24 +39,82 @@ export class SynthEngine {
     this.rng = new SeededRandom(seed ^ 0x55aa55aa);
   }
 
+  /** Soft cap for overlapping non-player voices; the player's own gunshots always bypass it. */
+  public maxVoices = 64;
+  /** Use cheap equal-power panning instead of HRTF (mobile CPUs). */
+  public lowCostPanning = false;
+
   public ensureContext(masterVolume = 0.85): boolean {
     if (!this.ctx) {
       try {
+        const nav = navigator as Navigator & { audioSession?: { type: string } };
+        if (nav.audioSession) {
+          // iOS 17+: play through the ringer/silent switch like a game, not like a notification
+          nav.audioSession.type = 'playback';
+        }
         const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-        this.ctx = new AudioCtx();
+        this.ctx = new AudioCtx({ latencyHint: 'interactive' });
         this.initNoiseAndCurves(this.ctx);
         this.initBusArchitecture(this.ctx, masterVolume);
       } catch {
         return false;
       }
     }
-    if (this.ctx.state === 'suspended') {
+    if (this.ctx.state !== 'running' && this.ctx.state !== 'closed') {
       this.ctx.resume().catch(() => {});
     }
     if (!this.ambientStarted && this.ctx.state === 'running') {
       this.startAmbientStreetBed();
     }
     return true;
+  }
+
+  /**
+   * Must be called from inside a user gesture (touchend/click/keydown). Mobile browsers only
+   * unlock or re-resume an interrupted AudioContext from a gesture, and iOS additionally needs a
+   * buffer to actually start playing inside that gesture.
+   */
+  public unlockFromGesture(masterVolume: number): void {
+    if (!this.ensureContext(masterVolume) || !this.ctx) return;
+    const ctx = this.ctx;
+    if (ctx.state === 'running' && this.ambientStarted) return;
+    try {
+      const src = ctx.createBufferSource();
+      src.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+      src.connect(ctx.destination);
+      src.start(0);
+    } catch {
+      // Ignore
+    }
+    ctx.resume().then(() => {
+      if (!this.ambientStarted) this.startAmbientStreetBed();
+    }).catch(() => {});
+  }
+
+  /**
+   * Schedule slightly ahead of the audio clock. Scheduling exactly at currentTime lands in the
+   * past on devices with large render quanta, which swallows the first few ms of every envelope
+   * (the transient of a gunshot), so short sounds intermittently went missing.
+   */
+  public now(): number {
+    return this.ctx ? this.ctx.currentTime + 0.012 : 0;
+  }
+
+  public canStartVoice(): boolean {
+    return this.activeVoiceCount < this.maxVoices;
+  }
+
+  /** Detach a per-sound subgraph once it has finished so dead nodes never pile up on the buses. */
+  public releaseAfter(nodes: AudioNode[], durationSec: number): void {
+    setTimeout(() => {
+      for (const n of nodes) {
+        try {
+          n.disconnect();
+        } catch {
+          // Already disconnected
+        }
+      }
+    }, Math.ceil((durationSec + 0.1) * 1000));
   }
 
   public setMasterVolume(vol: number): void {
@@ -269,7 +327,7 @@ export class SynthEngine {
   ): void {
     if (!this.ensureContext() || !this.ctx) return;
     const ctx = this.ctx;
-    const t0 = ctx.currentTime + Math.max(0, delaySec);
+    const t0 = this.now() + Math.max(0, delaySec);
 
     // Round-robin + seeded variation so full-auto never sounds identical
     this.roundRobinIndex = (this.roundRobinIndex + 1) % 6;
@@ -293,12 +351,15 @@ export class SynthEngine {
     outGain.connect(spectralLP);
     spectralLP.connect(destination);
 
+    const persistent: AudioNode[] = [outGain, spectralLP];
     if (reverbSendNode) {
       const revSend = ctx.createGain();
       revSend.gain.value = (isFirstPerson ? 0.32 : 0.28 + (0.72 - 0.28) * distNorm) * occAtten;
       spectralLP.connect(revSend);
       revSend.connect(reverbSendNode);
+      persistent.push(revSend);
     }
+    if (destination instanceof PannerNode) persistent.push(destination);
 
     // Layer 1: Ultra-short mechanical hammer/sear click (0..4ms)
     const clickOsc = ctx.createOscillator();
@@ -376,7 +437,8 @@ export class SynthEngine {
       boltOsc.stop(boltTime + 0.035);
     }
 
-    this.trackVoice(0.5);
+    this.releaseAfter(persistent, delaySec + 0.6);
+    this.trackVoice(delaySec + 0.5);
   }
 
   public playFootstep(
@@ -386,7 +448,7 @@ export class SynthEngine {
   ): void {
     if (!this.ensureContext() || !this.ctx) return;
     const ctx = this.ctx;
-    const t0 = ctx.currentTime;
+    const t0 = this.now();
     const out = destination ?? this.buses.footsteps;
 
     const pitch = this.rng.range(0.92, 1.08);
@@ -433,6 +495,7 @@ export class SynthEngine {
     noise.connect(filter).connect(nGain).connect(out);
     noise.start(t0, this.rng.range(0, 1.5), 0.1);
 
+    if (out instanceof PannerNode) this.releaseAfter([out], 0.15);
     this.trackVoice(0.12);
   }
 
@@ -443,7 +506,7 @@ export class SynthEngine {
   ): void {
     if (!this.ensureContext() || !this.ctx) return;
     const ctx = this.ctx;
-    const t0 = ctx.currentTime;
+    const t0 = this.now();
     const pitch = this.rng.range(0.9, 1.12);
 
     // Short impact crack/thud
@@ -483,13 +546,14 @@ export class SynthEngine {
       ring.stop(t0 + 0.26);
     }
 
+    if (destination instanceof PannerNode) this.releaseAfter([destination], 0.3);
     this.trackVoice(0.26);
   }
 
   public playCasingBounce(speed: number, surfaceMat: MaterialId, destination: AudioNode): void {
     if (!this.ensureContext() || !this.ctx) return;
     const ctx = this.ctx;
-    const t0 = ctx.currentTime;
+    const t0 = this.now();
     const amp = Math.min(0.22, speed * 0.045);
     if (amp < 0.01) return;
 
@@ -506,6 +570,7 @@ export class SynthEngine {
       osc.start(t0);
       osc.stop(t0 + 0.06);
     }
+    if (destination instanceof PannerNode) this.releaseAfter([destination], 0.1);
     this.trackVoice(0.07);
   }
 
@@ -514,7 +579,7 @@ export class SynthEngine {
   ): void {
     if (!this.ensureContext() || !this.ctx) return;
     const ctx = this.ctx;
-    const t0 = ctx.currentTime;
+    const t0 = this.now();
     const out = this.buses.weapons;
 
     const triggerClick = (offset: number, freq: number, dur: number, vol: number) => {
@@ -553,7 +618,7 @@ export class SynthEngine {
   ): void {
     if (!this.ensureContext() || !this.ctx) return;
     const ctx = this.ctx;
-    const t0 = ctx.currentTime;
+    const t0 = this.now();
     const out = this.buses.ui;
 
     if (type === 'hover') {
@@ -621,7 +686,7 @@ export class SynthEngine {
   private playHeartbeatPulse(intensity: number): void {
     if (!this.ctx) return;
     const ctx = this.ctx;
-    const t0 = ctx.currentTime;
+    const t0 = this.now();
     for (const [offset, freq, amp] of [
       [0.0, 58, 0.28 * intensity],
       [0.16, 48, 0.20 * intensity]

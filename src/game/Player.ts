@@ -43,6 +43,9 @@ export class Player implements CombatantTarget {
 
   private footstepAccum = 0;
   private semiAutoLatched = false;
+  private fireBufferTimer = 0;
+  private pendingLookYaw = 0;
+  private pendingLookPitch = 0;
 
   private _forward = new THREE.Vector3();
   private _right = new THREE.Vector3();
@@ -149,9 +152,13 @@ export class Player implements CombatantTarget {
     }
 
     const wantAds = input.isAdsHeld();
-    const { yawDelta, pitchDelta } = input.consumeLookDelta(wantAds);
-    this.yaw += yawDelta;
-    this.pitch = THREE.MathUtils.clamp(this.pitch + pitchDelta, -1.48, 1.48);
+    const look = input.consumeLookDelta(wantAds);
+    this.yaw += look.yawDelta;
+    this.pitch = THREE.MathUtils.clamp(this.pitch + look.pitchDelta, -1.48, 1.48);
+    const yawDelta = look.yawDelta + this.pendingLookYaw;
+    const pitchDelta = look.pitchDelta + this.pendingLookPitch;
+    this.pendingLookYaw = 0;
+    this.pendingLookPitch = 0;
 
     // Apply smooth recoil recovery and camera kick
     if (this.weapon.recoilCameraKick.lengthSq() > 1e-6) {
@@ -276,11 +283,16 @@ export class Player implements CombatantTarget {
     if (!fireHeld) {
       this.semiAutoLatched = false;
     }
+    // A tap shorter than one sim step (or landing during the cooldown) is buffered briefly so it
+    // still fires instead of being silently dropped.
+    if (firePressed) this.fireBufferTimer = 0.15;
+    else this.fireBufferTimer = Math.max(0, this.fireBufferTimer - dt);
+    const tapBuffered = this.fireBufferTimer > 0;
 
     const wantShot =
       this.weapon.fireMode === 'AUTO'
-        ? fireHeld
-        : firePressed && !this.semiAutoLatched;
+        ? fireHeld || tapBuffered
+        : tapBuffered && !this.semiAutoLatched;
 
     if (wantShot) {
       if (this.weapon.magAmmo === 0 && !this.weapon.isReloading) {
@@ -290,8 +302,9 @@ export class Player implements CombatantTarget {
         }
       } else if (this.weapon.canFire()) {
         if (this.weapon.fireMode === 'SEMI') {
-          this.semiAutoLatched = true;
+          this.semiAutoLatched = fireHeld;
         }
+        this.fireBufferTimer = 0;
         this.executePlayerShot(bvh, rigidWorld, damageSystem, effects, spatialAudio, allTargets, nowSec);
       }
     }
@@ -429,6 +442,21 @@ export class Player implements CombatantTarget {
     throwVel.y += 3.2;
     throwVel.add(this.controller.velocity);
     rigidWorld.spawnThrowable(mesh, spawnOrigin, throwVel, type, type === 'frag' ? 2.3 : 1.7);
+  }
+
+  /**
+   * Apply mouse/touch look once per rendered frame. On displays faster than the 120 Hz sim, some
+   * frames run zero fixed steps, so look applied only in stepFixed made the camera judder.
+   * The delta is still forwarded to the next fixed step for weapon sway.
+   */
+  public applyFrameLook(input: Input): void {
+    if (!this.isAlive) return;
+    const look = input.consumeLookDelta(input.isAdsHeld());
+    if (look.yawDelta === 0 && look.pitchDelta === 0) return;
+    this.yaw += look.yawDelta;
+    this.pitch = THREE.MathUtils.clamp(this.pitch + look.pitchDelta, -1.48, 1.48);
+    this.pendingLookYaw += look.yawDelta;
+    this.pendingLookPitch += look.pitchDelta;
   }
 
   public getAimDirection(out: THREE.Vector3): THREE.Vector3 {

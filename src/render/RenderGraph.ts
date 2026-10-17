@@ -46,6 +46,7 @@ export class RenderGraph {
   private internalHeight = window.innerHeight;
   private currentScale = 1.0;
   private lastScaleChangeTime = 0;
+  private whiteAoTexture: THREE.DataTexture;
 
   // Dedicated scene & camera for rendering the weapon viewmodel at constant 58 deg FOV
   public viewmodelScene = new THREE.Scene();
@@ -76,7 +77,7 @@ export class RenderGraph {
 
     this.cssWidth = window.innerWidth;
     this.cssHeight = window.innerHeight;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = this.getEffectiveDpr();
     this.internalWidth = Math.max(320, Math.floor(this.cssWidth * dpr * this.currentScale));
     this.internalHeight = Math.max(180, Math.floor(this.cssHeight * dpr * this.currentScale));
 
@@ -97,6 +98,10 @@ export class RenderGraph {
     this.viewmodelScene.add(this.viewmodelCamera);
 
     this.shadows = new ShadowSystem(quality.shadowMapSize);
+    this.shadows.farCascadeStride = this.settings.data.quality === 'low' ? 4 : 2;
+
+    this.whiteAoTexture = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+    this.whiteAoTexture.needsUpdate = true;
     this.prepass = new Prepass(this.internalWidth, this.internalHeight);
     this.gtao = new GTAO(this.internalWidth, this.internalHeight);
     this.taa = new TAA(this.internalWidth, this.internalHeight);
@@ -106,6 +111,15 @@ export class RenderGraph {
     this.composite = new Composite(this.internalWidth, this.internalHeight);
 
     this.initHdrSceneTarget(this.internalWidth, this.internalHeight);
+  }
+
+  /**
+   * Phones report DPR 3+, and rendering this pipeline at native retina resolution is what made
+   * mobile lag. Above ~1.5x the extra pixels are barely visible, so cap there (lower on phones).
+   */
+  private getEffectiveDpr(): number {
+    const cap = this.settings.isMobile ? 1.25 : 1.5;
+    return Math.min(window.devicePixelRatio || 1, cap);
   }
 
   private initHdrSceneTarget(width: number, height: number): void {
@@ -131,7 +145,7 @@ export class RenderGraph {
 
   public applyInternalScale(scale: number): void {
     this.currentScale = THREE.MathUtils.clamp(scale, 0.5, 1.25);
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = this.getEffectiveDpr();
     const newW = Math.max(320, Math.floor(this.cssWidth * dpr * this.currentScale));
     const newH = Math.max(180, Math.floor(this.cssHeight * dpr * this.currentScale));
 
@@ -150,13 +164,15 @@ export class RenderGraph {
 
   public evaluateDynamicScale(avgFrameMs: number, nowSec: number): void {
     if (!this.settings.data.dynamicRenderScale) return;
-    if (nowSec - this.lastScaleChangeTime < 2.2) return;
+    if (nowSec - this.lastScaleChangeTime < 1.6) return;
     const userTargetScale = this.settings.data.renderScale;
 
-    if (avgFrameMs > 24.0 && this.currentScale > Math.max(0.6, userTargetScale - 0.2)) {
-      this.applyInternalScale(this.currentScale - 0.1);
+    // Aim for a steady 60 FPS: shed resolution under ~52 FPS, recover above ~75 FPS
+    const minScale = Math.max(0.5, userTargetScale - 0.35);
+    if (avgFrameMs > 19.0 && this.currentScale > minScale + 0.001) {
+      this.applyInternalScale(Math.max(minScale, this.currentScale - 0.1));
       this.lastScaleChangeTime = nowSec;
-    } else if (avgFrameMs < 13.5 && this.currentScale < userTargetScale) {
+    } else if (avgFrameMs < 13.3 && this.currentScale < userTargetScale) {
       this.applyInternalScale(Math.min(userTargetScale, this.currentScale + 0.1));
       this.lastScaleChangeTime = nowSec;
     }
@@ -210,11 +226,10 @@ export class RenderGraph {
     );
 
     // 3. GTAO + Bilateral spatial filter
-    const aoTexture = this.gtao.render(
-      this.renderer,
-      this.prepass.normalDepthTexture,
-      camera
-    );
+    const aoTexture: THREE.Texture =
+      this.settings.data.gtao || debugView === 'ao'
+        ? this.gtao.render(this.renderer, this.prepass.normalDepthTexture, camera)
+        : this.whiteAoTexture;
 
     // 4. Forward HDR Opaque + Sky + Volumetric Clouds + Transparent Effects pass
     this.renderer.info.reset();

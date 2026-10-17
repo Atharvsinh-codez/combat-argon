@@ -8,6 +8,7 @@ export interface MenuCallbacks {
   onSettingsChanged: () => void;
   onToggleTouchControls?: () => boolean;
   isTouchControlsEnabled?: () => boolean;
+  onToggleFullscreen?: () => void;
 }
 
 /**
@@ -43,8 +44,12 @@ export class Menu {
           <button class="btn-primary" id="btn-deploy">DEPLOY TO COMBAT</button>
           <button class="btn-secondary" id="btn-open-settings-title">GRAPHICS & AUDIO SETTINGS</button>
         </div>
+        <div class="menu-fs-row">
+          <button class="btn-secondary fs-btn" id="btn-fullscreen-title">ENTER FULLSCREEN</button>
+        </div>
+        <p class="menu-hint">iPhone: tap Share → Add to Home Screen to play fullscreen.</p>
         <div class="controls-grid">
-          <div><span>WASD / L-STICK</span> Move &amp; Auto-Sprint</div>
+          <div><span>WASD / L-STICK</span> Move · slide up to lock sprint</div>
           <div><span>MOUSE / R-TOUCH</span> Aim / Fire / ADS</div>
           <div><span>Q &amp; E / PEEK</span> Tactical Lean L/R</div>
           <div><span>C / CRCH</span> Crouch Stance</div>
@@ -62,6 +67,7 @@ export class Menu {
         <div class="menu-actions vertical">
           <button class="btn-primary" id="btn-resume">RESUME COMBAT</button>
           <button class="btn-secondary" id="btn-open-settings-pause">GRAPHICS & AUDIO SETTINGS</button>
+          <button class="btn-secondary fs-btn" id="btn-fullscreen-pause">ENTER FULLSCREEN</button>
           <button class="btn-secondary" id="btn-restart">RESTART MATCH</button>
         </div>
       </div>
@@ -95,6 +101,14 @@ export class Menu {
           <label class="setting-row">
             <span>Mobile / Tablet Touch HUD</span>
             <input type="checkbox" id="set-touch-hud" />
+          </label>
+          <label class="setting-row fs-setting">
+            <span>Auto Fullscreen on Deploy</span>
+            <input type="checkbox" id="set-auto-fs" />
+          </label>
+          <label class="setting-row">
+            <span>Ambient Occlusion (GTAO)</span>
+            <input type="checkbox" id="set-gtao" />
           </label>
           <label class="setting-row">
             <span>Temporal AA (TAA)</span>
@@ -153,6 +167,18 @@ export class Menu {
     bindBtn('#btn-resume', () => this.callbacks.onResume());
     bindBtn('#btn-restart', () => this.callbacks.onRestartMatch());
     bindBtn('#btn-play-again', () => this.callbacks.onRestartMatch());
+    bindBtn('#btn-fullscreen-title', () => this.callbacks.onToggleFullscreen?.());
+    bindBtn('#btn-fullscreen-pause', () => this.callbacks.onToggleFullscreen?.());
+
+    const autoFsInput = this.root.querySelector('#set-auto-fs') as HTMLInputElement;
+    autoFsInput.addEventListener('change', () => {
+      this.settings.update({ autoFullscreen: autoFsInput.checked });
+    });
+    const gtaoInput = this.root.querySelector('#set-gtao') as HTMLInputElement;
+    gtaoInput.addEventListener('change', () => {
+      this.settings.update({ gtao: gtaoInput.checked });
+      this.callbacks.onSettingsChanged();
+    });
 
     bindBtn('#btn-open-settings-title', () => {
       this.returnToTitleFromSettings = true;
@@ -238,6 +264,8 @@ export class Menu {
     (this.root.querySelector('#set-sens') as HTMLInputElement).value = String(s.sensitivity);
     (this.root.querySelector('#lbl-sens') as HTMLElement).textContent = s.sensitivity.toFixed(2);
     (this.root.querySelector('#set-taa') as HTMLInputElement).checked = s.taa;
+    (this.root.querySelector('#set-gtao') as HTMLInputElement).checked = s.gtao;
+    (this.root.querySelector('#set-auto-fs') as HTMLInputElement).checked = s.autoFullscreen;
     (this.root.querySelector('#set-mb') as HTMLSelectElement).value = s.motionBlur;
     (this.root.querySelector('#set-master') as HTMLInputElement).value = String(s.masterVolume);
     (this.root.querySelector('#lbl-master') as HTMLElement).textContent = `${Math.round(s.masterVolume * 100)}%`;
@@ -284,6 +312,12 @@ export class Menu {
     headline.textContent = victory ? 'MISSION ACCOMPLISHED' : 'MISSION FAILED';
     headline.style.color = victory ? '#4ade80' : '#f87171';
     summary.textContent = `TF-ALPHA ${alphaScore} — ${bravoScore} OPFOR`;
+  }
+
+  public setFullscreenState(isFullscreen: boolean): void {
+    this.root.querySelectorAll('.fs-btn').forEach((el) => {
+      el.textContent = isFullscreen ? 'EXIT FULLSCREEN' : 'ENTER FULLSCREEN';
+    });
   }
 
   public hideAll(): void {

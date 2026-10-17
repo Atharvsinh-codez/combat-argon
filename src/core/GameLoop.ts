@@ -12,6 +12,7 @@ export interface FrameTelemetry {
 export class GameLoop {
   public static readonly FIXED_DT = 1 / 120;
   public static readonly MAX_ACCUMULATOR = 1 / 12;
+  public static readonly MAX_SUBSTEPS = 5;
 
   private accumulator = 0;
   private lastTime = 0;
@@ -98,10 +99,14 @@ export class GameLoop {
 
     const p0 = performance.now();
     let substeps = 0;
-    while (this.accumulator >= GameLoop.FIXED_DT && substeps < 8) {
+    while (this.accumulator >= GameLoop.FIXED_DT && substeps < GameLoop.MAX_SUBSTEPS) {
       this.fixedStepFn(GameLoop.FIXED_DT);
       this.accumulator -= GameLoop.FIXED_DT;
       substeps++;
+    }
+    // A slow device would otherwise carry the backlog forward and fall into a death spiral
+    if (substeps >= GameLoop.MAX_SUBSTEPS) {
+      this.accumulator = Math.min(this.accumulator, GameLoop.FIXED_DT);
     }
     this.telemetry.physicsTimeMs = performance.now() - p0;
     this.telemetry.substeps = substeps;
@@ -129,13 +134,15 @@ export class GameLoop {
     }
 
     const avg = sum / this.historyCount;
-    const sub = this.sortScratch.subarray(0, this.historyCount);
-    sub.sort();
-    const p95Idx = Math.min(this.historyCount - 1, Math.floor(this.historyCount * 0.95));
-
     this.telemetry.frameTimeMs = ms;
     this.telemetry.avgFrameTimeMs = avg;
-    this.telemetry.p95FrameTimeMs = sub[p95Idx];
+    // Percentile sort is the only non-trivial cost here; refresh it a few times per second
+    if (this.historyCount < 30 || this.historyIndex % 15 === 0) {
+      const sub = this.sortScratch.subarray(0, this.historyCount);
+      sub.sort();
+      const p95Idx = Math.min(this.historyCount - 1, Math.floor(this.historyCount * 0.95));
+      this.telemetry.p95FrameTimeMs = sub[p95Idx];
+    }
     this.telemetry.worstFrameTimeMs = worst;
     this.telemetry.fps = 1000 / Math.max(1, avg);
   }

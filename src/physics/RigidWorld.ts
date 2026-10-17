@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { BVH, MaterialId } from './BVH';
 
+// Must not alias a scratch matrix: inactive pool slots would inherit the last composed transform
+const ZERO_SCALE_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
+
 export type RigidShapeType = 'sphere' | 'box' | 'capsule';
 
 export interface RigidBody {
@@ -503,7 +506,7 @@ export class RigidWorld {
   }
 
   public syncRenderTransforms(alpha: number): void {
-    const zeroMat = this._mat4.makeScale(0, 0, 0);
+    const zeroMat = ZERO_SCALE_MATRIX;
     let casingNeedsUpdate = false;
 
     for (let i = 0; i < this.casingPool.length; i++) {

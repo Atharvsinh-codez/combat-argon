@@ -34,6 +34,7 @@ export interface GameSettingsData {
   dynamicRenderScale: boolean;
   renderScale: number;
   masterVolume: number;
+  autoFullscreen: boolean;
   botDifficulty: 'recruit' | 'regular' | 'veteran';
   keybinds: Keybinds;
 }
@@ -97,7 +98,16 @@ export const QUALITY_PRESETS: Record<QualityPreset, QualityPresetParams> = {
   }
 };
 
-const STORAGE_KEY = 'dustline_tactical_fps_settings_v1';
+// v2: v1 saved desktop 'high' defaults on phones, which is why mobile ran so slowly
+const STORAGE_KEY = 'dustline_tactical_fps_settings_v2';
+
+/** Phones & tablets: coarse primary pointer, or forced with `?mobile=1` / `?touch=1`. */
+export function isLikelyMobileDevice(): boolean {
+  if (typeof window === 'undefined') return false;
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('mobile') === '1' || params.get('touch') === '1') return true;
+  return window.matchMedia('(pointer: coarse)').matches;
+}
 
 export class Settings {
   public data: GameSettingsData;
@@ -109,24 +119,28 @@ export class Settings {
     this.applyQueryOverrides();
   }
 
+  public readonly isMobile = isLikelyMobileDevice();
+
   public getDefaults(): GameSettingsData {
+    const mobile = isLikelyMobileDevice();
     return {
-      quality: 'high',
+      quality: mobile ? 'low' : 'high',
       sensitivity: 1.0,
       adsMultiplier: 0.65,
-      fov: 78,
+      fov: mobile ? 84 : 78,
       invertY: false,
-      motionBlur: 'low',
+      motionBlur: mobile ? 'off' : 'low',
       bloom: true,
-      gtao: true,
+      gtao: !mobile,
       taa: true,
-      chromaticAberration: true,
+      chromaticAberration: !mobile,
       vignette: true,
-      filmGrain: true,
+      filmGrain: !mobile,
       cameraShake: 0.75,
       dynamicRenderScale: true,
-      renderScale: 1.0,
+      renderScale: mobile ? QUALITY_PRESETS.low.renderScale : 1.0,
       masterVolume: 0.85,
+      autoFullscreen: mobile,
       botDifficulty: 'regular',
       keybinds: {
         forward: 'KeyW',
@@ -151,6 +165,7 @@ export class Settings {
     this.data.quality = preset;
     this.data.renderScale = params.renderScale;
     this.data.motionBlur = preset === 'low' ? 'off' : preset === 'ultra' ? 'high' : 'low';
+    this.data.gtao = preset !== 'low';
     this.save();
     this.notify();
   }

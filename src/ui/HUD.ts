@@ -90,6 +90,33 @@ export class HUD {
   private scoreboardBodyEl!: HTMLDivElement;
   private telemetryEl!: HTMLDivElement;
 
+  // Layout/style writes are the main HUD cost on phones, so only touch the DOM when a value changes
+  private domCache = new WeakMap<HTMLElement, Map<string, string>>();
+  private minimapAccum = 1;
+  private scoreboardAccum = 1;
+  private lastScoreboardHtml = '';
+  private damageCanvasDirty = false;
+
+  private setText(el: HTMLElement, value: string): void {
+    this.setProp(el, '#text', value);
+  }
+
+  private setStyle(el: HTMLElement, prop: string, value: string): void {
+    this.setProp(el, prop, value);
+  }
+
+  private setProp(el: HTMLElement, key: string, value: string): void {
+    let m = this.domCache.get(el);
+    if (!m) {
+      m = new Map();
+      this.domCache.set(el, m);
+    }
+    if (m.get(key) === value) return;
+    m.set(key, value);
+    if (key === '#text') el.textContent = value;
+    else el.style.setProperty(key, value);
+  }
+
   constructor(parent: HTMLElement) {
     this.root = document.createElement('div');
     this.root.id = 'hud-root';
@@ -234,8 +261,8 @@ export class HUD {
   public triggerHitMarker(headshot: boolean, killed: boolean): void {
     this.hitMarkerTimer = killed ? 0.18 : 0.12;
     this.hitMarkerEl.classList.toggle('headshot', headshot || killed);
-    this.hitMarkerEl.style.opacity = '1';
-    this.hitMarkerEl.style.transform = `translate(-50%, -50%) scale(${killed ? 1.28 : 1.08})`;
+    this.setStyle(this.hitMarkerEl, 'opacity', '1');
+    this.setStyle(this.hitMarkerEl, 'transform', `translate(-50%, -50%) scale(${killed ? 1.28 : 1.08})`);
   }
 
   public triggerDamageIndicator(sourceWorldPos: THREE.Vector3): void {
@@ -290,29 +317,29 @@ export class HUD {
     remainingSec: number,
     zoneName: string,
     showScoreboard: boolean,
-    combatantStats: CombatantStats[],
+    combatantStats: () => CombatantStats[],
     showTelemetry: boolean,
-    telemetryText: string
+    telemetryText: () => string
   ): void {
     // 1. Dynamic Crosshair spread & ADS fade
     const w = player.weapon;
     const horizSpeed = Math.hypot(player.controller.velocity.x, player.controller.velocity.z);
     const rawGap = 5 + w.currentSpread * 320 + horizSpeed * 1.45 + (player.controller.isGrounded ? 0 : 8);
-    const gapPx = THREE.MathUtils.clamp(rawGap, 4, 28);
+    const gapPx = Math.round(THREE.MathUtils.clamp(rawGap, 4, 28) * 2) / 2;
     const adsAlpha = Math.max(0, 1 - w.adsProgress * 1.15);
-    this.crosshairEl.style.opacity = adsAlpha.toFixed(2);
-    this.chTop.style.transform = `translate(-50%, ${-(gapPx + 6)}px)`;
-    this.chBottom.style.transform = `translate(-50%, ${gapPx}px)`;
-    this.chLeft.style.transform = `translate(${-(gapPx + 6)}px, -50%)`;
-    this.chRight.style.transform = `translate(${gapPx}px, -50%)`;
+    this.setStyle(this.crosshairEl, 'opacity', adsAlpha.toFixed(2));
+    this.setStyle(this.chTop, 'transform', `translate(-50%, ${-(gapPx + 6)}px)`);
+    this.setStyle(this.chBottom, 'transform', `translate(-50%, ${gapPx}px)`);
+    this.setStyle(this.chLeft, 'transform', `translate(${-(gapPx + 6)}px, -50%)`);
+    this.setStyle(this.chRight, 'transform', `translate(${gapPx}px, -50%)`);
 
     // 2. Hit Marker decay
     if (this.hitMarkerTimer > 0) {
       this.hitMarkerTimer -= dt;
       if (this.hitMarkerTimer <= 0) {
-        this.hitMarkerEl.style.opacity = '0';
+        this.setStyle(this.hitMarkerEl, 'opacity', '0');
       } else {
-        this.hitMarkerEl.style.transform = 'translate(-50%, -50%) scale(1.0)';
+        this.setStyle(this.hitMarkerEl, 'transform', 'translate(-50%, -50%) scale(1.0)');
       }
     }
 
@@ -334,11 +361,10 @@ export class HUD {
       this.trailHealth = hp;
     }
 
-    this.hpTextEl.textContent = String(hp).padStart(3, '0');
-    this.hpFillEl.style.width = `${hp}%`;
-    this.hpFillEl.style.background =
-      hp <= 35 ? 'linear-gradient(90deg, #ff3b30, #ff6b58)' : 'linear-gradient(90deg, #e8f0f8, #ffffff)';
-    this.hpTrailEl.style.width = `${this.trailHealth.toFixed(1)}%`;
+    this.setText(this.hpTextEl, String(hp).padStart(3, '0'));
+    this.setStyle(this.hpFillEl, 'width', `${hp}%`);
+    this.setStyle(this.hpFillEl, 'background', hp <= 35 ? 'linear-gradient(90deg, #ff3b30, #ff6b58)' : 'linear-gradient(90deg, #e8f0f8, #ffffff)');
+    this.setStyle(this.hpTrailEl, 'width', `${this.trailHealth.toFixed(1)}%`);
 
     const baseStance = !player.controller.isGrounded
       ? 'AIR'
@@ -349,39 +375,39 @@ export class HUD {
           : 'STAND';
     const leanSuffix =
       player.leanAmount < -0.35 ? ' · PEEK L' : player.leanAmount > 0.35 ? ' · PEEK R' : '';
-    this.stanceTextEl.textContent = `${baseStance}${leanSuffix}`;
-    this.staminaFillEl.style.width = '100%';
+    this.setText(this.stanceTextEl, `${baseStance}${leanSuffix}`);
+    this.setStyle(this.staminaFillEl, 'width', '100%');
 
     // 5. Weapon & Ammo Readout
-    this.magCountEl.textContent = String(w.magAmmo).padStart(2, '0');
-    this.magCountEl.style.color = w.magAmmo <= 7 ? '#ff5548' : '#f4f7fa';
-    this.reserveCountEl.textContent = String(w.reserveAmmo).padStart(3, '0');
-    this.fireModeEl.textContent = w.fireMode;
-    this.grenadeCountEl.textContent = `FRAG x${w.explosiveCount}`;
+    this.setText(this.magCountEl, String(w.magAmmo).padStart(2, '0'));
+    this.setStyle(this.magCountEl, 'color', w.magAmmo <= 7 ? '#ff5548' : '#f4f7fa');
+    this.setText(this.reserveCountEl, String(w.reserveAmmo).padStart(3, '0'));
+    this.setText(this.fireModeEl, w.fireMode);
+    this.setText(this.grenadeCountEl, `FRAG x${w.explosiveCount}`);
 
     if (w.isReloading) {
-      this.reloadBarWrapEl.style.opacity = '1';
+      this.setStyle(this.reloadBarWrapEl, 'opacity', '1');
       const prog = THREE.MathUtils.clamp(w.reloadTimer / Math.max(0.01, w.reloadDuration), 0, 1);
-      this.reloadFillEl.style.width = `${(prog * 100).toFixed(1)}%`;
+      this.setStyle(this.reloadFillEl, 'width', `${(prog * 100).toFixed(1)}%`);
     } else {
-      this.reloadBarWrapEl.style.opacity = '0';
+      this.setStyle(this.reloadBarWrapEl, 'opacity', '0');
     }
 
     // 6. Score, Clock & Zone Callout
-    this.alphaScoreEl.textContent = String(alphaScore).padStart(2, '0');
-    this.bravoScoreEl.textContent = String(bravoScore).padStart(2, '0');
+    this.setText(this.alphaScoreEl, String(alphaScore).padStart(2, '0'));
+    this.setText(this.bravoScoreEl, String(bravoScore).padStart(2, '0'));
     const mins = Math.floor(Math.max(0, remainingSec) / 60);
     const secs = Math.floor(Math.max(0, remainingSec) % 60);
-    this.clockEl.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-    this.zoneEl.textContent = zoneName;
+    this.setText(this.clockEl, `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`);
+    this.setText(this.zoneEl, zoneName);
 
     // 7. Respawn Banner
     if (!player.isAlive) {
-      this.respawnBannerEl.style.display = 'block';
-      const timerSpan = this.respawnBannerEl.querySelector('#hud-respawn-timer');
-      if (timerSpan) timerSpan.textContent = Math.max(0, player.respawnTimer).toFixed(1);
+      this.setStyle(this.respawnBannerEl, 'display', 'block');
+      const timerSpan = this.respawnBannerEl.querySelector('#hud-respawn-timer') as HTMLElement | null;
+      if (timerSpan) this.setText(timerSpan, Math.max(0, player.respawnTimer).toFixed(1));
     } else {
-      this.respawnBannerEl.style.display = 'none';
+      this.setStyle(this.respawnBannerEl, 'display', 'none');
     }
 
     // 8. Expire old Kill Feed entries
@@ -393,25 +419,40 @@ export class HUD {
     }
 
     // 9. Render Tactical Minimap Radar
-    this.renderMinimap(nowSec, player, bots, footprints);
+    this.minimapAccum += dt;
+    if (this.minimapAccum >= 1 / 30) {
+      this.minimapAccum = 0;
+      this.renderMinimap(nowSec, player, bots, footprints);
+    }
 
     // 10. Scoreboard (Tab)
-    this.scoreboardEl.style.display = showScoreboard ? 'block' : 'none';
-    if (showScoreboard) {
-      this.renderScoreboard(combatantStats);
+    this.setStyle(this.scoreboardEl, 'display', showScoreboard ? 'block' : 'none');
+    this.scoreboardAccum += dt;
+    if (showScoreboard && this.scoreboardAccum >= 0.25) {
+      this.scoreboardAccum = 0;
+      this.renderScoreboard(combatantStats());
+    } else if (!showScoreboard) {
+      this.scoreboardAccum = 1;
     }
 
     // 11. Telemetry (F1 / timings)
-    this.telemetryEl.style.display = showTelemetry ? 'block' : 'none';
+    this.setStyle(this.telemetryEl, 'display', showTelemetry ? 'block' : 'none');
     if (showTelemetry) {
-      this.telemetryEl.textContent = telemetryText;
+      this.setText(this.telemetryEl, telemetryText());
     }
   }
 
   private renderDamageArcs(dt: number, player: Player): void {
     const ctx = this.damageCtx;
+    if (this.damageArcs.length === 0) {
+      if (this.damageCanvasDirty) {
+        ctx.clearRect(0, 0, 320, 320);
+        this.damageCanvasDirty = false;
+      }
+      return;
+    }
     ctx.clearRect(0, 0, 320, 320);
-    if (this.damageArcs.length === 0) return;
+    this.damageCanvasDirty = true;
 
     const px = player.controller.position.x;
     const pz = player.controller.position.z;
@@ -555,7 +596,7 @@ export class HUD {
       })
       .join('');
 
-    this.scoreboardBodyEl.innerHTML = `
+    const html = `
       <div class="sb-row header">
         <span class="sb-col name">OPERATOR</span>
         <span class="sb-col">K</span>
@@ -566,5 +607,9 @@ export class HUD {
       </div>
       ${rows}
     `;
+    if (html !== this.lastScoreboardHtml) {
+      this.lastScoreboardHtml = html;
+      this.scoreboardBodyEl.innerHTML = html;
+    }
   }
 }

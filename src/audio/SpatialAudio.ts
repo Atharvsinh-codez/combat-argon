@@ -137,7 +137,7 @@ export class SpatialAudio {
     const ctx = this.synth.ctx;
     if (!ctx) return null;
     const panner = ctx.createPanner();
-    panner.panningModel = 'HRTF';
+    panner.panningModel = this.synth.lowCostPanning ? 'equalpower' : 'HRTF';
     panner.distanceModel = 'inverse';
     panner.refDistance = 2.2;
     panner.maxDistance = 120;
@@ -166,6 +166,7 @@ export class SpatialAudio {
       return;
     }
 
+    if (!this.synth.canStartVoice()) return;
     const { distance, occlusion } = this.computeOcclusion(pos);
     const speedOfSoundDelay = Math.min(0.28, distance / 343.0);
     const panner = this.createHRTFPanner(pos, this.synth.buses.weapons);
@@ -190,7 +191,7 @@ export class SpatialAudio {
     if (!panner) return;
 
     const ctx = this.synth.ctx;
-    const t0 = ctx.currentTime;
+    const t0 = this.synth.now();
     const osc = ctx.createOscillator();
     const g = ctx.createGain();
     osc.type = 'sawtooth';
@@ -201,6 +202,7 @@ export class SpatialAudio {
     osc.connect(g).connect(panner);
     osc.start(t0);
     osc.stop(t0 + 0.095);
+    this.synth.releaseAfter([panner], 0.12);
   }
 
   public playImpactAt(
@@ -210,7 +212,7 @@ export class SpatialAudio {
     nowSec = 0
   ): void {
     this.emitGameplaySound(pos, 18, 'neutral', nowSec);
-    if (!this.synth.ensureContext()) return;
+    if (!this.synth.ensureContext() || !this.synth.canStartVoice()) return;
     const { distance } = this.computeOcclusion(pos);
     if (distance > 75) return;
     const panner = this.createHRTFPanner(pos, this.synth.buses.impacts);
@@ -219,7 +221,7 @@ export class SpatialAudio {
   }
 
   public playCasingBounceAt(pos: THREE.Vector3, speed: number, surfaceMat: MaterialId): void {
-    if (!this.synth.ensureContext()) return;
+    if (!this.synth.ensureContext() || !this.synth.canStartVoice()) return;
     if (pos.distanceToSquared(this.listenerPos) > 18 * 18) return;
     const panner = this.createHRTFPanner(pos, this.synth.buses.impacts);
     if (!panner) return;
@@ -240,7 +242,7 @@ export class SpatialAudio {
       this.synth.playFootstep(materialId, isSprint, this.synth.buses.footsteps);
       return;
     }
-    if (pos.distanceToSquared(this.listenerPos) > 32 * 32) return;
+    if (pos.distanceToSquared(this.listenerPos) > 32 * 32 || !this.synth.canStartVoice()) return;
     const panner = this.createHRTFPanner(pos, this.synth.buses.footsteps);
     if (!panner) return;
     this.synth.playFootstep(materialId, isSprint, panner);
