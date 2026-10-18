@@ -1,0 +1,9 @@
+{
+  "name": "Operation Sirocco // Tactical Urban FPS",
+  "short_name": "Sirocco",
+  "start_url": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0b0f14",
+  "theme_color": "#0b0f14"
+}
