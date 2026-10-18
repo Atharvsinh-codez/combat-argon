@@ -1,4 +1,4 @@
-# OPERATION SIROCCO — Browser-Native Three.js Tactical FPS
+# OPERATION SIROCCO - Browser-Native Three.js Tactical FPS
 
 A self-contained, browser-native 3D first-person tactical shooter built with **Three.js r180 (`0.180.0`)** on **WebGL2** and **Vite 7**, featuring zero external runtime dependencies beyond `three`, zero external textures/models/audio files, a custom WebGL2 multi-pass post-processing pipeline, a custom SAH BVH + swept-capsule physics engine, a 100% procedural Web Audio synthesizer & HRTF spatializer, and tactical AI bots.
 
